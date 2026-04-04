@@ -33,6 +33,7 @@ TMS_DB = DATA_DIR / "tms.db"
 
 # ---------------------------------------------------------------------------
 # OMS metadata
+# Schema also defined in: models/oms.py (Pydantic), services/oms_api.py (ORM)
 # ---------------------------------------------------------------------------
 oms_metadata = sa.MetaData()
 
@@ -84,6 +85,7 @@ order_exceptions_table = sa.Table(
 
 # ---------------------------------------------------------------------------
 # WMS metadata
+# Schema also defined in: models/wms.py (Pydantic), services/wms_api.py (ORM)
 # ---------------------------------------------------------------------------
 wms_metadata = sa.MetaData()
 
@@ -127,6 +129,7 @@ stock_movements_table = sa.Table(
 
 # ---------------------------------------------------------------------------
 # TMS metadata
+# Schema also defined in: models/tms.py (Pydantic), services/tms_api.py (ORM)
 # ---------------------------------------------------------------------------
 tms_metadata = sa.MetaData()
 

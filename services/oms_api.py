@@ -31,6 +31,7 @@ DB_URL = f"sqlite+aiosqlite:///{DATA_DIR / 'oms.db'}"
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
+# Schema also defined in: models/oms.py (Pydantic), seed/seed_db.py (table creation)
 # ---------------------------------------------------------------------------
 
 

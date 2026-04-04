@@ -26,6 +26,7 @@ from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
+# Schema also defined in: models/tms.py (Pydantic), seed/seed_db.py (table creation)
 # ---------------------------------------------------------------------------
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tms.db"
