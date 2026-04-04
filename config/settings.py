@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     # API Keys
     anthropic_api_key: str = "not-set"  # Default for dev, required for prod
 
+    # CORS
+    cors_allowed_origins: list[str] = [
+        "http://localhost:3000",
+        "http://localhost:8080",
+    ]
+
     # Service URLs
     agentfield_url: str = "http://localhost:8080"
     oms_api_url: str = "http://localhost:8001"

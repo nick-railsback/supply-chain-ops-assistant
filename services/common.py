@@ -5,17 +5,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from config.settings import get_settings
 from services.middleware import TraceMiddleware
 
 
 def create_app(service_name: str) -> FastAPI:
+    settings = get_settings()
     app = FastAPI(title=f"{service_name.upper()} API", version="1.0.0")
 
     app.add_middleware(TraceMiddleware)
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_credentials=True,
+        allow_origins=settings.cors_allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
     )
