@@ -7,11 +7,15 @@ future wiring once the Anthropic SDK is available.
 
 from __future__ import annotations
 
+import logging
 import re
 
 from config.prompts import INTERPRET_QUERY_SYSTEM, INTERPRET_QUERY_USER
+from config.settings import get_settings
 from models.query import DataFilter, QueryPlan
 from models.shared import TargetSystem, UserIntent
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Prompt builder
@@ -163,30 +167,89 @@ def _rule_based_interpret(user_query: str) -> QueryPlan | None:
 # ---------------------------------------------------------------------------
 
 
+def _suggest_alternatives(user_query: str) -> list[str]:
+    """Suggest alternative queries based on partial regex matches.
+
+    Returns a list of example queries the user could try.
+    """
+    query_lower = user_query.lower()
+    suggestions: list[str] = []
+
+    # Check for partial keyword matches
+    if "order" in query_lower:
+        suggestions.extend([
+            "show all orders",
+            "list pending orders",
+            "show at-risk orders",
+        ])
+    if "exception" in query_lower or "error" in query_lower or "issue" in query_lower:
+        suggestions.extend([
+            "show exceptions",
+            "list critical exceptions",
+        ])
+    if "inventory" in query_lower or "stock" in query_lower or "warehouse" in query_lower:
+        suggestions.extend([
+            "show inventory",
+            "show low-stock items",
+        ])
+    if "shipment" in query_lower or "shipping" in query_lower or "delivery" in query_lower:
+        suggestions.extend([
+            "show shipments",
+            "show sla breaches",
+        ])
+    if "update" in query_lower or "assign" in query_lower or "change" in query_lower:
+        suggestions.extend([
+            "assign exceptions to [name]",
+            "update order status to shipped",
+        ])
+    if "report" in query_lower:
+        suggestions.extend([
+            "generate exception summary report",
+            "show sla compliance report",
+        ])
+
+    # If no partial matches, return supported categories
+    if not suggestions:
+        suggestions = [
+            "I can help with: order lookups, exception tracking, "
+            "inventory status, shipment tracking, SLA compliance, "
+            "and operational reports.",
+        ]
+
+    return suggestions
+
+
 async def interpret_query(
     user_query: str,
     conversation_context: list[dict[str, str]],
 ) -> QueryPlan:
     """Interpret a natural-language query into a structured QueryPlan.
 
-    Currently uses a rule-based fallback. When the Anthropic SDK is
-    available, replace the fallback path with an LLM call using the
-    prompts produced by ``_build_prompt``.
+    Tries LLM interpretation first (when available), falls back to
+    rule-based pattern matching, then to clarification.
     """
-    # Build prompts (ready for LLM integration)
-    _system_prompt, _user_prompt = _build_prompt(user_query, conversation_context)
+    settings = get_settings()
+    system_prompt, user_prompt = _build_prompt(user_query, conversation_context)
 
-    # TODO: LLM integration — call Anthropic API with _system_prompt and
-    # _user_prompt, parse the JSON response into a QueryPlan, and return it.
-    # Example:
-    #   client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-    #   message = await client.messages.create(
-    #       model=settings.llm_model,
-    #       system=_system_prompt,
-    #       messages=[{"role": "user", "content": _user_prompt}],
-    #       max_tokens=1024,
-    #   )
-    #   return QueryPlan.model_validate_json(message.content[0].text)
+    # Try LLM interpretation if available
+    if settings.is_llm_available:
+        try:
+            import anthropic
+
+            client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            message = await client.messages.create(
+                model=settings.llm_model,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+                max_tokens=1024,
+            )
+            text = message.content[0].text
+            return QueryPlan.model_validate_json(text)
+        except Exception as exc:
+            logger.warning("LLM query interpretation failed: %s", exc)
+            logger.debug("LLM raw response: %s", locals().get("text", "N/A"))
+    else:
+        logger.debug("LLM unavailable, using rule-based interpreter")
 
     # Rule-based fallback
     plan = _rule_based_interpret(user_query)
