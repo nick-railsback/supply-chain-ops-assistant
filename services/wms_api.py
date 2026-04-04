@@ -13,7 +13,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from models.shared import PaginatedResponse
 from models.wms import FulfillmentCenter, InventoryItem, StockMovement
-from services.common import create_app
+from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
@@ -130,36 +130,18 @@ async def list_inventory(
     stmt = select(InventoryORM)
     count_stmt = select(func.count()).select_from(InventoryORM)
 
+    filters = []
     if sku is not None:
-        stmt = stmt.where(InventoryORM.sku == sku)
-        count_stmt = count_stmt.where(InventoryORM.sku == sku)
+        filters.append(InventoryORM.sku == sku)
     if fulfillment_center_id is not None:
-        stmt = stmt.where(
-            InventoryORM.fulfillment_center_id == fulfillment_center_id
-        )
-        count_stmt = count_stmt.where(
-            InventoryORM.fulfillment_center_id == fulfillment_center_id
-        )
+        filters.append(InventoryORM.fulfillment_center_id == fulfillment_center_id)
     if category is not None:
-        stmt = stmt.where(InventoryORM.category == category)
-        count_stmt = count_stmt.where(InventoryORM.category == category)
+        filters.append(InventoryORM.category == category)
     if below_reorder_point is True:
-        stmt = stmt.where(
-            InventoryORM.quantity_available < InventoryORM.reorder_point
-        )
-        count_stmt = count_stmt.where(
-            InventoryORM.quantity_available < InventoryORM.reorder_point
-        )
+        filters.append(InventoryORM.quantity_available < InventoryORM.reorder_point)
 
-    total = (await session.execute(count_stmt)).scalar_one()
-    rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
-
-    return PaginatedResponse[InventoryItem](
-        items=[InventoryItem.model_validate(r) for r in rows],
-        total=total,
-        offset=offset,
-        limit=limit,
-    )
+    stmt, count_stmt = apply_filters(stmt, count_stmt, filters)
+    return await build_paginated_response(session, stmt, count_stmt, InventoryItem, offset, limit)
 
 
 @app.get("/centers", response_model=list[FulfillmentCenter])

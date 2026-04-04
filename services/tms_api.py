@@ -22,7 +22,7 @@ from models.tms import (
     SLASummary,
     TrackingEvent,
 )
-from services.common import create_app
+from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
@@ -129,38 +129,22 @@ async def list_shipments(
     query = select(ShipmentORM)
     count_query = select(func.count()).select_from(ShipmentORM)
 
-    if carrier:
-        query = query.where(ShipmentORM.carrier == carrier)
-        count_query = count_query.where(ShipmentORM.carrier == carrier)
-    if status:
-        query = query.where(ShipmentORM.status == status)
-        count_query = count_query.where(ShipmentORM.status == status)
-    if sla_status:
-        query = query.where(ShipmentORM.sla_status == sla_status)
-        count_query = count_query.where(ShipmentORM.sla_status == sla_status)
-    if origin_center_id:
-        query = query.where(ShipmentORM.origin_center_id == origin_center_id)
-        count_query = count_query.where(ShipmentORM.origin_center_id == origin_center_id)
-    if date_from:
-        query = query.where(ShipmentORM.label_created_at >= date_from)
-        count_query = count_query.where(ShipmentORM.label_created_at >= date_from)
-    if date_to:
-        query = query.where(ShipmentORM.label_created_at <= date_to)
-        count_query = count_query.where(ShipmentORM.label_created_at <= date_to)
+    filters = []
+    if carrier is not None:
+        filters.append(ShipmentORM.carrier == carrier)
+    if status is not None:
+        filters.append(ShipmentORM.status == status)
+    if sla_status is not None:
+        filters.append(ShipmentORM.sla_status == sla_status)
+    if origin_center_id is not None:
+        filters.append(ShipmentORM.origin_center_id == origin_center_id)
+    if date_from is not None:
+        filters.append(ShipmentORM.label_created_at >= date_from)
+    if date_to is not None:
+        filters.append(ShipmentORM.label_created_at <= date_to)
 
-    total_result = await db.execute(count_query)
-    total = total_result.scalar() or 0
-
-    query = query.offset(offset).limit(limit)
-    result = await db.execute(query)
-    rows = result.scalars().all()
-
-    return PaginatedResponse[Shipment](
-        items=[Shipment.model_validate(r) for r in rows],
-        total=total,
-        offset=offset,
-        limit=limit,
-    )
+    query, count_query = apply_filters(query, count_query, filters)
+    return await build_paginated_response(db, query, count_query, Shipment, offset, limit)
 
 
 @app.get("/shipments/sla-breaches", response_model=PaginatedResponse[Shipment])

@@ -1,14 +1,24 @@
-"""FastAPI service factory with shared middleware."""
+"""FastAPI service factory with shared middleware and utilities."""
+
+from __future__ import annotations
+
+from typing import Any, TypeVar
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+from sqlalchemy import ColumnElement, Select, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
 from config.settings import get_settings
+from models.shared import PaginatedResponse
 from services.middleware import TraceMiddleware
+
+T = TypeVar("T", bound=BaseModel)
 
 _WRITE_METHODS = {"PATCH", "POST", "PUT", "DELETE"}
 
@@ -57,3 +67,43 @@ def create_app(service_name: str) -> FastAPI:
         return JSONResponse(status_code=404, content={"detail": str(detail)})
 
     return app
+
+
+# ---------------------------------------------------------------------------
+# Shared filter and pagination utilities
+# ---------------------------------------------------------------------------
+
+
+def apply_filters(
+    query: Select[Any],
+    count_query: Select[Any],
+    filters: list[ColumnElement[bool]],
+) -> tuple[Select[Any], Select[Any]]:
+    """Apply a list of filter conditions to both the data query and count query."""
+    if filters:
+        query = query.where(*filters)
+        count_query = count_query.where(*filters)
+    return query, count_query
+
+
+async def build_paginated_response(
+    session: AsyncSession,
+    query: Select[Any],
+    count_query: Select[Any],
+    model_class: type[T],
+    offset: int,
+    limit: int,
+) -> PaginatedResponse[T]:
+    """Execute queries and return a PaginatedResponse."""
+    total_result = await session.execute(count_query)
+    total = total_result.scalar() or 0
+
+    result = await session.execute(query.offset(offset).limit(limit))
+    rows = result.scalars().all()
+
+    return PaginatedResponse[model_class](  # type: ignore[valid-type]
+        items=[model_class.model_validate(r) for r in rows],
+        total=total,
+        offset=offset,
+        limit=limit,
+    )

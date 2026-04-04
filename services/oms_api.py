@@ -21,7 +21,7 @@ from models.oms import (
     OrderWithLineItems,
 )
 from models.shared import PaginatedResponse
-from services.common import create_app
+from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # Database path
@@ -167,19 +167,8 @@ async def list_orders(
     if max_value is not None:
         filters.append(OrderORM.total_value <= max_value)
 
-    if filters:
-        query = query.where(*filters)
-        count_query = count_query.where(*filters)
-
-    total_result = await session.execute(count_query)
-    total = total_result.scalar() or 0
-
-    query = query.offset(offset).limit(limit)
-    result = await session.execute(query)
-    rows = result.scalars().all()
-
-    items = [Order.model_validate(row) for row in rows]
-    return PaginatedResponse[Order](items=items, total=total, offset=offset, limit=limit)
+    query, count_query = apply_filters(query, count_query, filters)
+    return await build_paginated_response(session, query, count_query, Order, offset, limit)
 
 
 @app.get("/orders/at-risk", response_model=PaginatedResponse[Order])
@@ -261,21 +250,8 @@ async def list_exceptions(
     if date_to is not None:
         filters.append(OrderExceptionORM.created_at <= date_to)
 
-    if filters:
-        query = query.where(*filters)
-        count_query = count_query.where(*filters)
-
-    total_result = await session.execute(count_query)
-    total = total_result.scalar() or 0
-
-    query = query.offset(offset).limit(limit)
-    result = await session.execute(query)
-    rows = result.scalars().all()
-
-    items = [OrderException.model_validate(row) for row in rows]
-    return PaginatedResponse[OrderException](
-        items=items, total=total, offset=offset, limit=limit
-    )
+    query, count_query = apply_filters(query, count_query, filters)
+    return await build_paginated_response(session, query, count_query, OrderException, offset, limit)
 
 
 @app.get("/exceptions/summary", response_model=ExceptionSummary)
