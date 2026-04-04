@@ -71,7 +71,9 @@ class OpsClient:
     # ------------------------------------------------------------------
 
     def _trace_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = {
+            "X-API-Key": self._settings.api_secret_key,
+        }
         trace_id = trace_id_var.get()
         if trace_id:
             headers["X-Trace-ID"] = trace_id

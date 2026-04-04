@@ -23,6 +23,9 @@ class Settings(BaseSettings):
         "http://localhost:8080",
     ]
 
+    # Authentication
+    api_secret_key: str = "dev-secret-key-change-me"
+
     # Service URLs
     agentfield_url: str = "http://localhost:8080"
     oms_api_url: str = "http://localhost:8001"
