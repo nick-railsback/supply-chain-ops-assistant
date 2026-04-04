@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
+from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy import Float, ForeignKey, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
@@ -14,7 +16,9 @@ from models.shared import PaginatedResponse
 from models.tms import (
     CarrierStats,
     Shipment,
+    ShipmentStatus,
     ShipmentWithTracking,
+    SLAStatus,
     SLASummary,
     TrackingEvent,
 )
@@ -83,6 +87,18 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
+
+
+# ---------------------------------------------------------------------------
+# Patch request models
+# ---------------------------------------------------------------------------
+
+
+class ShipmentPatch(BaseModel):
+    status: ShipmentStatus | None = None
+    sla_status: SLAStatus | None = None
+    actual_delivery: datetime | None = None
+    estimated_delivery: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -348,20 +364,18 @@ async def sla_summary(
 @app.patch("/shipments/{shipment_id}", response_model=Shipment)
 async def update_shipment(
     shipment_id: str,
-    updates: dict[str, str],
+    body: ShipmentPatch,
     db: AsyncSession = Depends(get_db),
 ) -> Shipment:
-    """Update shipment status."""
+    """Update shipment fields with typed validation."""
     query = select(ShipmentORM).where(ShipmentORM.shipment_id == shipment_id)
     result = await db.execute(query)
     shipment = result.scalar_one_or_none()
     if shipment is None:
         raise HTTPException(status_code=404, detail=f"Shipment {shipment_id} not found")
 
-    allowed_fields = {"status", "sla_status", "actual_delivery", "estimated_delivery"}
-    for field, value in updates.items():
-        if field in allowed_fields:
-            setattr(shipment, field, value)
+    for field, value in body.model_dump(exclude_unset=True, mode="json").items():
+        setattr(shipment, field, value)
 
     await db.commit()
     await db.refresh(shipment)
