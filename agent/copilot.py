@@ -181,27 +181,12 @@ class Copilot:
     ) -> ReportOutput:
         """Generate a structured report from a request and data payload.
 
-        TODO: Wire to LLM to produce rich narrative sections.  Currently
-        returns a single-section stub report.
+        Delegates to ``report_generator.generate_report`` which produces
+        rule-based reports with optional LLM narrative enrichment.
         """
-        from datetime import UTC, datetime
+        from agent.report_generator import generate_report
 
-        # TODO: LLM integration — use GENERATE_REPORT_SYSTEM / _USER prompts.
-
-        return ReportOutput(
-            report_type="general",
-            title=f"Report: {report_request[:60]}",
-            generated_at=datetime.now(UTC),
-            sections=[
-                ReportSection(
-                    title="Data Summary",
-                    content="Placeholder report — LLM integration pending.",
-                    data_table=data.get("items"),
-                    highlight=None,
-                )
-            ],
-            action_items=[],
-        )
+        return await generate_report(self.client, report_request)
 
 
 # ===================================================================

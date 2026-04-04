@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from config.prompts import GENERATE_REPORT_SYSTEM, GENERATE_REPORT_USER
 from models.report import ReportOutput, ReportSection
 from services.client import OpsClient
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Report type detection
@@ -382,6 +387,50 @@ _REPORT_BUILDERS: dict[str, Any] = {
 # ---------------------------------------------------------------------------
 
 
+async def _enrich_with_llm(report: ReportOutput, report_request: str, data: dict[str, Any]) -> ReportOutput:
+    """Optionally enrich a rule-based report with LLM narrative."""
+    from config.settings import get_settings
+
+    settings = get_settings()
+    if not settings.is_llm_available:
+        return report
+
+    try:
+        import anthropic
+
+        # Serialize report data for the LLM
+        data_payload = json.dumps(report.model_dump(), default=str)
+        prompt = GENERATE_REPORT_USER.format(
+            report_request=report_request,
+            data_payload=data_payload,
+        )
+
+        llm_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+        message = await llm_client.messages.create(
+            model=settings.llm_model,
+            system=GENERATE_REPORT_SYSTEM,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=2048,
+        )
+        llm_report = ReportOutput.model_validate_json(message.content[0].text)
+
+        # Merge LLM narrative into rule-based sections
+        for i, section in enumerate(report.sections):
+            if i < len(llm_report.sections) and llm_report.sections[i].content:
+                section.content = llm_report.sections[i].content
+
+        # Merge action items (deduplicate)
+        existing = set(report.action_items)
+        for item in llm_report.action_items:
+            if item not in existing:
+                report.action_items.append(item)
+
+        return report
+    except Exception as exc:
+        logger.warning("LLM report enrichment failed, returning rule-based report: %s", exc)
+        return report
+
+
 async def generate_report(
     client: OpsClient, report_request: str
 ) -> ReportOutput:
@@ -390,11 +439,10 @@ async def generate_report(
     1. Determines report_type from the request string.
     2. Collects the appropriate data from backend APIs.
     3. Builds a ReportOutput with typed sections and action items.
-
-    TODO: Integrate LLM for richer narrative generation using
-    GENERATE_REPORT_SYSTEM / GENERATE_REPORT_USER prompt templates.
+    4. Optionally enriches with LLM narrative when available.
     """
     report_type = _detect_report_type(report_request)
     data = await collect_report_data(client, report_type)
     builder = _REPORT_BUILDERS[report_type]
-    return builder(data)
+    report = builder(data)
+    return await _enrich_with_llm(report, report_request, data)
