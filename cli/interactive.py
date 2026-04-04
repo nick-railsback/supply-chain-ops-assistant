@@ -417,23 +417,17 @@ class InteractiveCLI:
         self.history: list[str] = []
 
     async def _check_health(self) -> dict[str, bool]:
-        """Ping each API and return a service-name -> healthy mapping."""
-        results: dict[str, bool] = {}
+        """Ping each API /health endpoint and return a service-name -> healthy mapping."""
         client = OpsClient()
         try:
-            checks = {
-                "OMS": client.list_orders(limit=1),
-                "WMS": client.list_inventory(limit=1),
-                "TMS": client.list_shipments(limit=1),
-            }
-            outcomes = await asyncio.gather(
-                *checks.values(), return_exceptions=True
+            oms, wms, tms = await asyncio.gather(
+                client.check_health("oms"),
+                client.check_health("wms"),
+                client.check_health("tms"),
             )
-            for name, outcome in zip(checks.keys(), outcomes):
-                results[name] = not isinstance(outcome, BaseException)
+            return {"OMS": oms, "WMS": wms, "TMS": tms}
         finally:
             await client.aclose()
-        return results
 
     def _display_health(self, health: dict[str, bool]) -> None:
         """Print health status for each service."""

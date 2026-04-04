@@ -141,6 +141,21 @@ class OpsClient:
             limit=data["limit"],
         )
 
+    # ------------------------------------------------------------------
+    # Health check
+    # ------------------------------------------------------------------
+
+    async def check_health(self, service: str) -> bool:
+        """Ping /{service}/health and return True on 200."""
+        client = {"oms": self._oms, "wms": self._wms, "tms": self._tms}.get(service)
+        if client is None:
+            return False
+        try:
+            resp = await client.get("/health")
+            return resp.status_code == 200
+        except httpx.ConnectError:
+            return False
+
     # ==================================================================
     # OMS methods
     # ==================================================================
