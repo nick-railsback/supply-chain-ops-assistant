@@ -163,27 +163,14 @@ class Copilot:
     ) -> ActionProposal:
         """Produce an ActionProposal from a user request and context data.
 
-        TODO: Wire to LLM to generate the proposal from the user query and
-        relevant data.  For now returns a minimal placeholder proposal.
+        Delegates to ``propose_action`` which tries LLM first, then falls
+        back to keyword-based detection.
         """
-        # TODO: LLM integration — use PROPOSE_ACTION_SYSTEM / _USER prompts
-        # to generate a proper ActionProposal from the model response.
+        from agent.action_handler import propose_action
 
-        proposal = ActionProposal(
-            action_type=ActionType.UPDATE_ORDER_STATUS,
-            target_ids=relevant_data.get("target_ids", []),
-            changes=relevant_data.get("changes", {}),
-            reasoning=f"Action requested via: {user_query}",
-            impact_summary="Placeholder — LLM integration pending.",
-            risk_level=RiskLevel.MEDIUM,
-            requires_confirmation=True,
-        )
-
-        errors = await validate_action_proposal(proposal)
-        if errors:
-            raise ValueError(f"Action validation failed: {'; '.join(errors)}")
-
-        return proposal
+        # Convert dict to list of rows for propose_action
+        rows = relevant_data.get("items", [relevant_data])
+        return await propose_action(self.client, user_query, rows)
 
     # ------------------------------------------------------------------
     # Report generation

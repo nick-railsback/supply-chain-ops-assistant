@@ -123,24 +123,40 @@ async def propose_action(
 ) -> ActionProposal:
     """Build an ActionProposal from a user request and context data.
 
-    Steps:
-      1. Detect action_type via keyword matching.
-      2. Extract target IDs and changes from *relevant_data*.
-      3. Assess risk level.
-      4. Construct the ActionProposal.
-      5. Validate via ``validate_action_proposal`` before returning.
-
-    TODO: Replace rule-based parsing with LLM call using
-    ``PROPOSE_ACTION_SYSTEM`` / ``PROPOSE_ACTION_USER`` prompts.
+    Tries LLM interpretation first (when available), falls back to
+    keyword-based detection.
     """
-    # TODO: LLM integration point —
-    #   prompt = PROPOSE_ACTION_USER.format(
-    #       user_query=user_query,
-    #       relevant_data=json.dumps(relevant_data, default=str),
-    #   )
-    #   response = await llm_call(system=PROPOSE_ACTION_SYSTEM, user=prompt)
-    #   proposal = ActionProposal.model_validate_json(response)
+    from config.settings import get_settings
 
+    settings = get_settings()
+
+    # Try LLM-based proposal generation
+    if settings.is_llm_available:
+        try:
+            import json
+
+            import anthropic
+
+            llm_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+            prompt = PROPOSE_ACTION_USER.format(
+                user_query=user_query,
+                relevant_data=json.dumps(relevant_data, default=str),
+            )
+            message = await llm_client.messages.create(
+                model=settings.llm_model,
+                system=PROPOSE_ACTION_SYSTEM,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=1024,
+            )
+            proposal = ActionProposal.model_validate_json(message.content[0].text)
+            errors = await validate_action_proposal(proposal)
+            if errors:
+                raise ValueError(f"Action validation failed: {'; '.join(errors)}")
+            return proposal
+        except Exception as exc:
+            logger.warning("LLM action proposal failed, falling back to rule-based: %s", exc)
+
+    # Rule-based fallback
     action_type = _detect_action_type(user_query)
 
     # Extract target IDs — look in each data row for common ID fields
