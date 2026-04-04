@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from agent.confidence import ConfidenceRouter, RoutingDecision
-from agent.query_interpreter import interpret_query
+from agent.query_interpreter import _suggest_alternatives, interpret_query
 from agent.validators import validate_action_proposal, validate_query_plan
 from config.prompts import (
     CLARIFICATION_RESPONSE,
@@ -106,9 +106,9 @@ class Copilot:
 
         # 3. Handle clarification
         if decision == RoutingDecision.CLARIFY:
-            message = CLARIFICATION_RESPONSE.format(
-                options="Please provide more detail about what you need."
-            )
+            suggestions = _suggest_alternatives(user_query)
+            options_text = "\n".join(f"  - {s}" for s in suggestions)
+            message = CLARIFICATION_RESPONSE.format(options=options_text)
             self._update_history("assistant", message)
             return {
                 "status": "clarify",
