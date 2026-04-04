@@ -1,0 +1,9 @@
+{
+  "name": "Cross-system order and shipment join",
+  "query": "Show me all orders that have delayed shipments",
+  "expected_intent": "cross_system_query",
+  "expected_systems": ["oms", "tms"],
+  "expected_result_contains": ["order_id", "shipment_status"],
+  "expected_result_count": null,
+  "expected_error": null
+}

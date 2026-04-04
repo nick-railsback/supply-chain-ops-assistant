@@ -1,0 +1,9 @@
+{
+  "name": "Resolve exception action request",
+  "query": "Resolve exception EXC-0042 as fixed",
+  "expected_intent": "action_request",
+  "expected_systems": ["oms"],
+  "expected_result_contains": ["exception_id", "status"],
+  "expected_result_count": 1,
+  "expected_error": null
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Shipment tracking lookup",
+  "query": "Where is shipment SHP-20240115-00042 right now?",
+  "expected_intent": "status_check",
+  "expected_systems": ["tms"],
+  "expected_result_contains": ["shipment_status"],
+  "expected_result_count": 1,
+  "expected_error": null
+}

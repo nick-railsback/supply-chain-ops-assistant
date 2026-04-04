@@ -1,0 +1,9 @@
+{
+  "name": "Order status check",
+  "query": "What is the status of order ORD-2024-000123?",
+  "expected_intent": "status_check",
+  "expected_systems": ["oms"],
+  "expected_result_contains": ["status"],
+  "expected_result_count": 1,
+  "expected_error": null
+}

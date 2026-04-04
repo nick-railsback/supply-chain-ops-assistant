@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Data
+data/*.db
+
+# Tool caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# OS
+.DS_Store
+
+# uv
+uv.lock.bak
+
+_bmad/
+_bmad-output/
+
+.claude/

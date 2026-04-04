@@ -1,0 +1,204 @@
+"""Query interpretation reasoner for natural language to QueryPlan.
+
+Converts free-form user queries into structured QueryPlan objects.
+Currently uses a rule-based fallback; LLM integration is stubbed for
+future wiring once the Anthropic SDK is available.
+"""
+
+from __future__ import annotations
+
+import re
+
+from config.prompts import INTERPRET_QUERY_SYSTEM, INTERPRET_QUERY_USER
+from models.query import DataFilter, QueryPlan
+from models.shared import TargetSystem, UserIntent
+
+# ---------------------------------------------------------------------------
+# Prompt builder
+# ---------------------------------------------------------------------------
+
+
+def _build_prompt(
+    user_query: str,
+    conversation_context: list[dict[str, str]],
+) -> tuple[str, str]:
+    """Build (system_prompt, user_prompt) for the LLM call.
+
+    Returns the fully-rendered prompt pair that will be sent to the model
+    once LLM integration is wired up.
+    """
+    context_str = ""
+    if conversation_context:
+        lines = [
+            f"  {turn.get('role', 'user')}: {turn.get('content', '')}"
+            for turn in conversation_context
+        ]
+        context_str = "\n".join(lines)
+    else:
+        context_str = "  (no prior conversation)"
+
+    system_prompt = INTERPRET_QUERY_SYSTEM
+    user_prompt = INTERPRET_QUERY_USER.format(
+        user_query=user_query,
+        conversation_context=context_str,
+    )
+    return system_prompt, user_prompt
+
+
+# ---------------------------------------------------------------------------
+# Rule-based fallback interpreter
+# ---------------------------------------------------------------------------
+
+# Pattern tuples: (compiled regex, intent, target_systems, primary_entity, extra_filters)
+_PATTERNS: list[
+    tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list[DataFilter]]
+] = [
+    # --- Orders ---
+    (
+        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "order",
+        [],
+    ),
+    (
+        re.compile(r"\bat[- ]?risk\b.*\borders?\b|\borders?\b.*\bat[- ]?risk\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "order",
+        [DataFilter(field="at_risk", operator="eq", value=True)],
+    ),
+    (
+        re.compile(r"\bpending\b.*\borders?\b|\borders?\b.*\bpending\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "order",
+        [DataFilter(field="status", operator="eq", value="pending")],
+    ),
+    # --- Exceptions ---
+    (
+        re.compile(
+            r"\b(?:show|list|get|find|display)\b.*\bexceptions?\b",
+            re.IGNORECASE,
+        ),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "exception",
+        [],
+    ),
+    # --- Inventory ---
+    (
+        re.compile(
+            r"\b(?:show|list|get|find|display)\b.*\b(?:inventory|stock)\b",
+            re.IGNORECASE,
+        ),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.WMS],
+        "inventory",
+        [],
+    ),
+    (
+        re.compile(r"\blow[- ]?stock\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.WMS],
+        "inventory",
+        [DataFilter(field="below_reorder_point", operator="eq", value=True)],
+    ),
+    # --- Shipments ---
+    (
+        re.compile(
+            r"\b(?:show|list|get|find|display)\b.*\bshipments?\b",
+            re.IGNORECASE,
+        ),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.TMS],
+        "shipment",
+        [],
+    ),
+    (
+        re.compile(r"\bsla\b.*\bbreach", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.TMS],
+        "shipment",
+        [DataFilter(field="sla_status", operator="eq", value="breached")],
+    ),
+    # --- Cross-system ---
+    (
+        re.compile(
+            r"\b(?:orders?\b.*\bshipments?\b|shipments?\b.*\borders?\b)",
+            re.IGNORECASE,
+        ),
+        UserIntent.CROSS_SYSTEM_QUERY,
+        [TargetSystem.OMS, TargetSystem.TMS],
+        "order",
+        [],
+    ),
+]
+
+
+def _rule_based_interpret(user_query: str) -> QueryPlan | None:
+    """Attempt to match user_query against known patterns.
+
+    Returns a QueryPlan on match, or None if no pattern matches.
+    """
+    for pattern, intent, targets, entity, filters in _PATTERNS:
+        if pattern.search(user_query):
+            requires_join = len(targets) > 1
+            join_key = "order_id" if requires_join else None
+            return QueryPlan(
+                intent=intent,
+                target_systems=targets,
+                primary_entity=entity,
+                filters=list(filters),
+                confidence=0.75,
+                reasoning=f"Rule-based match for '{entity}' query",
+                requires_join=requires_join,
+                join_key=join_key,
+            )
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+async def interpret_query(
+    user_query: str,
+    conversation_context: list[dict[str, str]],
+) -> QueryPlan:
+    """Interpret a natural-language query into a structured QueryPlan.
+
+    Currently uses a rule-based fallback. When the Anthropic SDK is
+    available, replace the fallback path with an LLM call using the
+    prompts produced by ``_build_prompt``.
+    """
+    # Build prompts (ready for LLM integration)
+    _system_prompt, _user_prompt = _build_prompt(user_query, conversation_context)
+
+    # TODO: LLM integration — call Anthropic API with _system_prompt and
+    # _user_prompt, parse the JSON response into a QueryPlan, and return it.
+    # Example:
+    #   client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
+    #   message = await client.messages.create(
+    #       model=settings.llm_model,
+    #       system=_system_prompt,
+    #       messages=[{"role": "user", "content": _user_prompt}],
+    #       max_tokens=1024,
+    #   )
+    #   return QueryPlan.model_validate_json(message.content[0].text)
+
+    # Rule-based fallback
+    plan = _rule_based_interpret(user_query)
+    if plan is not None:
+        return plan
+
+    # If nothing matches, request clarification
+    return QueryPlan(
+        intent=UserIntent.CLARIFICATION_NEEDED,
+        target_systems=[],
+        primary_entity="unknown",
+        filters=[],
+        confidence=0.2,
+        reasoning="Could not determine intent from the query — requesting clarification.",
+    )

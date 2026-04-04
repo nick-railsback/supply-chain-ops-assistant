@@ -1,0 +1,9 @@
+{
+  "name": "Ambiguous query needing clarification",
+  "query": "What about the thing from yesterday?",
+  "expected_intent": "clarification_needed",
+  "expected_systems": [],
+  "expected_result_contains": [],
+  "expected_result_count": null,
+  "expected_error": null
+}

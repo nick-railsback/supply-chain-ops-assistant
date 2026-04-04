@@ -1,0 +1,9 @@
+{
+  "name": "Bulk escalate critical exceptions",
+  "query": "Escalate all critical severity exceptions that have been open for more than 24 hours",
+  "expected_intent": "action_request",
+  "expected_systems": ["oms"],
+  "expected_result_contains": ["exception_id", "severity"],
+  "expected_result_count": null,
+  "expected_error": null
+}

@@ -1,0 +1,9 @@
+{
+  "name": "Low stock inventory query",
+  "query": "Show me all items below reorder point in the WMS",
+  "expected_intent": "analysis",
+  "expected_systems": ["wms"],
+  "expected_result_contains": ["sku", "quantity_available"],
+  "expected_result_count": null,
+  "expected_error": null
+}

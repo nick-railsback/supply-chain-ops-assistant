@@ -1,0 +1,9 @@
+{
+  "name": "Order analysis by channel",
+  "query": "Analyze order volume and exception rates by sales channel for the past week",
+  "expected_intent": "analysis",
+  "expected_systems": ["oms"],
+  "expected_result_contains": ["channel", "exception_rate"],
+  "expected_result_count": null,
+  "expected_error": null
+}

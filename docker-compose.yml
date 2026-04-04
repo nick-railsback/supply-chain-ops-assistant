@@ -1,0 +1,72 @@
+services:
+  seed:
+    build: .
+    command: python -m seed.seed_db
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - oms-api
+      - wms-api
+      - tms-api
+
+  oms-api:
+    build: .
+    command: uvicorn services.oms_api:app --host 0.0.0.0 --port 8001
+    ports:
+      - "8001:8001"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  wms-api:
+    build: .
+    command: uvicorn services.wms_api:app --host 0.0.0.0 --port 8002
+    ports:
+      - "8002:8002"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  tms-api:
+    build: .
+    command: uvicorn services.tms_api:app --host 0.0.0.0 --port 8003
+    ports:
+      - "8003:8003"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  copilot:
+    build: .
+    command: python -c "from cli.interactive import main; main()"
+    stdin_open: true
+    tty: true
+    depends_on:
+      oms-api:
+        condition: service_healthy
+      wms-api:
+        condition: service_healthy
+      tms-api:
+        condition: service_healthy
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-not-set}
+      - OMS_API_URL=http://oms-api:8001
+      - WMS_API_URL=http://wms-api:8002
+      - TMS_API_URL=http://tms-api:8003
+    env_file:
+      - .env

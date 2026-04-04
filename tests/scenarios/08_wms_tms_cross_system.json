@@ -1,0 +1,9 @@
+{
+  "name": "WMS-TMS cross-system inventory in transit",
+  "query": "Show inventory items currently being shipped to fulfillment centers",
+  "expected_intent": "cross_system_query",
+  "expected_systems": ["wms", "tms"],
+  "expected_result_contains": ["sku", "carrier"],
+  "expected_result_count": null,
+  "expected_error": null
+}

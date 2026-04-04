@@ -1,0 +1,9 @@
+{
+  "name": "Exception summary report",
+  "query": "Generate a report of all open exceptions grouped by severity",
+  "expected_intent": "report",
+  "expected_systems": ["oms"],
+  "expected_result_contains": ["severity", "total_open"],
+  "expected_result_count": null,
+  "expected_error": null
+}

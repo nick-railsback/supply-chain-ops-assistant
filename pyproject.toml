@@ -1,0 +1,49 @@
+[project]
+name = "supply-chain-ops-assistant"
+version = "0.1.0"
+description = "AI operations copilot for supply chain teams — natural language queries against OMS, WMS, and TMS APIs"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2.11",
+    "pydantic-settings",
+    "httpx",
+    "sqlalchemy[asyncio]>=2.0",
+    "aiosqlite",
+    "structlog",
+    "rich",
+    "faker",
+]
+
+[dependency-groups]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "pytest-httpx",
+    "ruff",
+    "mypy",
+    "pre-commit",
+]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+exclude = ["_bmad", ".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+ignore_missing_imports = true
+strict = false
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+markers = [
+    "llm: tests that require LLM calls (deselect with '-m not llm')",
+]
