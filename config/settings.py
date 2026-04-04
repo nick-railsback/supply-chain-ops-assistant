@@ -1,9 +1,12 @@
 """Environment settings via pydantic-settings."""
 
+import logging
 from functools import lru_cache
 
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class ConfidenceThreshold(BaseModel):
@@ -16,6 +19,9 @@ class Settings(BaseSettings):
 
     # API Keys
     anthropic_api_key: str = "not-set"  # Default for dev, required for prod
+
+    # LLM feature toggle
+    llm_enabled: bool = True
 
     # CORS
     cors_allowed_origins: list[str] = [
@@ -58,6 +64,18 @@ class Settings(BaseSettings):
 
     def get_threshold(self, intent: str) -> ConfidenceThreshold:
         return self.confidence_thresholds[intent]
+
+    @property
+    def is_llm_available(self) -> bool:
+        return self.llm_enabled and self.anthropic_api_key != "not-set"
+
+    @model_validator(mode="after")
+    def _check_api_key(self) -> "Settings":
+        if self.llm_enabled and self.anthropic_api_key == "not-set":
+            logger.warning(
+                "ANTHROPIC_API_KEY is not set. LLM features will be unavailable."
+            )
+        return self
 
 
 @lru_cache
