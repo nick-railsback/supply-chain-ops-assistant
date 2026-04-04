@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
@@ -177,7 +177,7 @@ async def orders_at_risk(
     limit: int = Query(default=50, ge=1, le=200),
     session: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[Order]:
-    now = datetime.utcnow()
+    now = datetime.now(UTC)
     cutoff = (now + timedelta(days=2)).isoformat()
     now_str = now.isoformat()
 
@@ -315,7 +315,7 @@ async def patch_order(
         order.status = body.status
     if body.notes is not None:
         order.notes = body.notes
-    order.updated_at = datetime.utcnow().isoformat()
+    order.updated_at = datetime.now(UTC).isoformat()
 
     await session.commit()
     await session.refresh(order)
@@ -342,7 +342,7 @@ async def patch_exception(
     if body.status is not None:
         exc.status = body.status
         if body.status == "resolved":
-            exc.resolved_at = datetime.utcnow().isoformat()
+            exc.resolved_at = datetime.now(UTC).isoformat()
     if body.assigned_to is not None:
         exc.assigned_to = body.assigned_to
 
