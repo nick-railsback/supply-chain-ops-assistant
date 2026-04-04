@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncGenerator
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import Query
+from fastapi import Depends, Query
 from sqlalchemy import Boolean, Float, Integer, String, func, select
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from models.shared import PaginatedResponse
@@ -72,6 +73,10 @@ engine = create_async_engine(DATABASE_URL, echo=False)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
+    async with async_session_factory() as session:
+        yield session
+
 
 # ---------------------------------------------------------------------------
 # App
@@ -88,20 +93,20 @@ app = create_app("wms")
 async def list_low_stock_inventory(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[InventoryItem]:
     """Return inventory items where quantity_available < reorder_point."""
-    async with async_session_factory() as session:
-        condition = InventoryORM.quantity_available < InventoryORM.reorder_point
+    condition = InventoryORM.quantity_available < InventoryORM.reorder_point
 
-        total_result = await session.execute(
-            select(func.count()).select_from(InventoryORM).where(condition)
-        )
-        total = total_result.scalar_one()
+    total_result = await session.execute(
+        select(func.count()).select_from(InventoryORM).where(condition)
+    )
+    total = total_result.scalar_one()
 
-        rows_result = await session.execute(
-            select(InventoryORM).where(condition).offset(offset).limit(limit)
-        )
-        rows = rows_result.scalars().all()
+    rows_result = await session.execute(
+        select(InventoryORM).where(condition).offset(offset).limit(limit)
+    )
+    rows = rows_result.scalars().all()
 
     return PaginatedResponse[InventoryItem](
         items=[InventoryItem.model_validate(r) for r in rows],
@@ -119,35 +124,35 @@ async def list_inventory(
     below_reorder_point: bool | None = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[InventoryItem]:
     """List inventory with optional filters."""
-    async with async_session_factory() as session:
-        stmt = select(InventoryORM)
-        count_stmt = select(func.count()).select_from(InventoryORM)
+    stmt = select(InventoryORM)
+    count_stmt = select(func.count()).select_from(InventoryORM)
 
-        if sku is not None:
-            stmt = stmt.where(InventoryORM.sku == sku)
-            count_stmt = count_stmt.where(InventoryORM.sku == sku)
-        if fulfillment_center_id is not None:
-            stmt = stmt.where(
-                InventoryORM.fulfillment_center_id == fulfillment_center_id
-            )
-            count_stmt = count_stmt.where(
-                InventoryORM.fulfillment_center_id == fulfillment_center_id
-            )
-        if category is not None:
-            stmt = stmt.where(InventoryORM.category == category)
-            count_stmt = count_stmt.where(InventoryORM.category == category)
-        if below_reorder_point is True:
-            stmt = stmt.where(
-                InventoryORM.quantity_available < InventoryORM.reorder_point
-            )
-            count_stmt = count_stmt.where(
-                InventoryORM.quantity_available < InventoryORM.reorder_point
-            )
+    if sku is not None:
+        stmt = stmt.where(InventoryORM.sku == sku)
+        count_stmt = count_stmt.where(InventoryORM.sku == sku)
+    if fulfillment_center_id is not None:
+        stmt = stmt.where(
+            InventoryORM.fulfillment_center_id == fulfillment_center_id
+        )
+        count_stmt = count_stmt.where(
+            InventoryORM.fulfillment_center_id == fulfillment_center_id
+        )
+    if category is not None:
+        stmt = stmt.where(InventoryORM.category == category)
+        count_stmt = count_stmt.where(InventoryORM.category == category)
+    if below_reorder_point is True:
+        stmt = stmt.where(
+            InventoryORM.quantity_available < InventoryORM.reorder_point
+        )
+        count_stmt = count_stmt.where(
+            InventoryORM.quantity_available < InventoryORM.reorder_point
+        )
 
-        total = (await session.execute(count_stmt)).scalar_one()
-        rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    total = (await session.execute(count_stmt)).scalar_one()
+    rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
 
     return PaginatedResponse[InventoryItem](
         items=[InventoryItem.model_validate(r) for r in rows],
@@ -158,11 +163,12 @@ async def list_inventory(
 
 
 @app.get("/centers", response_model=list[FulfillmentCenter])
-async def list_centers() -> list[FulfillmentCenter]:
+async def list_centers(
+    session: AsyncSession = Depends(get_session),
+) -> list[FulfillmentCenter]:
     """Return all fulfillment centers."""
-    async with async_session_factory() as session:
-        result = await session.execute(select(FulfillmentCenterORM))
-        rows = result.scalars().all()
+    result = await session.execute(select(FulfillmentCenterORM))
+    rows = result.scalars().all()
     return [FulfillmentCenter.model_validate(r) for r in rows]
 
 
@@ -174,22 +180,22 @@ async def list_center_inventory(
     center_id: str,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[InventoryItem]:
     """Return inventory at a specific fulfillment center."""
-    async with async_session_factory() as session:
-        condition = InventoryORM.fulfillment_center_id == center_id
+    condition = InventoryORM.fulfillment_center_id == center_id
 
-        total = (
-            await session.execute(
-                select(func.count()).select_from(InventoryORM).where(condition)
-            )
-        ).scalar_one()
+    total = (
+        await session.execute(
+            select(func.count()).select_from(InventoryORM).where(condition)
+        )
+    ).scalar_one()
 
-        rows = (
-            await session.execute(
-                select(InventoryORM).where(condition).offset(offset).limit(limit)
-            )
-        ).scalars().all()
+    rows = (
+        await session.execute(
+            select(InventoryORM).where(condition).offset(offset).limit(limit)
+        )
+    ).scalars().all()
 
     return PaginatedResponse[InventoryItem](
         items=[InventoryItem.model_validate(r) for r in rows],
@@ -208,40 +214,40 @@ async def list_movements(
     date_to: datetime | None = Query(None),
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
+    session: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[StockMovement]:
     """List stock movements with optional filters."""
-    async with async_session_factory() as session:
-        stmt = select(StockMovementORM)
-        count_stmt = select(func.count()).select_from(StockMovementORM)
+    stmt = select(StockMovementORM)
+    count_stmt = select(func.count()).select_from(StockMovementORM)
 
-        if sku is not None:
-            stmt = stmt.where(StockMovementORM.sku == sku)
-            count_stmt = count_stmt.where(StockMovementORM.sku == sku)
-        if fulfillment_center_id is not None:
-            stmt = stmt.where(
-                StockMovementORM.fulfillment_center_id == fulfillment_center_id
-            )
-            count_stmt = count_stmt.where(
-                StockMovementORM.fulfillment_center_id == fulfillment_center_id
-            )
-        if movement_type is not None:
-            stmt = stmt.where(StockMovementORM.movement_type == movement_type)
-            count_stmt = count_stmt.where(
-                StockMovementORM.movement_type == movement_type
-            )
-        if date_from is not None:
-            date_from_str = date_from.isoformat()
-            stmt = stmt.where(StockMovementORM.timestamp >= date_from_str)
-            count_stmt = count_stmt.where(
-                StockMovementORM.timestamp >= date_from_str
-            )
-        if date_to is not None:
-            date_to_str = date_to.isoformat()
-            stmt = stmt.where(StockMovementORM.timestamp <= date_to_str)
-            count_stmt = count_stmt.where(StockMovementORM.timestamp <= date_to_str)
+    if sku is not None:
+        stmt = stmt.where(StockMovementORM.sku == sku)
+        count_stmt = count_stmt.where(StockMovementORM.sku == sku)
+    if fulfillment_center_id is not None:
+        stmt = stmt.where(
+            StockMovementORM.fulfillment_center_id == fulfillment_center_id
+        )
+        count_stmt = count_stmt.where(
+            StockMovementORM.fulfillment_center_id == fulfillment_center_id
+        )
+    if movement_type is not None:
+        stmt = stmt.where(StockMovementORM.movement_type == movement_type)
+        count_stmt = count_stmt.where(
+            StockMovementORM.movement_type == movement_type
+        )
+    if date_from is not None:
+        date_from_str = date_from.isoformat()
+        stmt = stmt.where(StockMovementORM.timestamp >= date_from_str)
+        count_stmt = count_stmt.where(
+            StockMovementORM.timestamp >= date_from_str
+        )
+    if date_to is not None:
+        date_to_str = date_to.isoformat()
+        stmt = stmt.where(StockMovementORM.timestamp <= date_to_str)
+        count_stmt = count_stmt.where(StockMovementORM.timestamp <= date_to_str)
 
-        total = (await session.execute(count_stmt)).scalar_one()
-        rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
+    total = (await session.execute(count_stmt)).scalar_one()
+    rows = (await session.execute(stmt.offset(offset).limit(limit))).scalars().all()
 
     return PaginatedResponse[StockMovement](
         items=[StockMovement.model_validate(r) for r in rows],
@@ -252,9 +258,10 @@ async def list_movements(
 
 
 @app.get("/stats/utilization", response_model=list[FulfillmentCenter])
-async def utilization_stats() -> list[FulfillmentCenter]:
+async def utilization_stats(
+    session: AsyncSession = Depends(get_session),
+) -> list[FulfillmentCenter]:
     """Return all centers with their current utilization."""
-    async with async_session_factory() as session:
-        result = await session.execute(select(FulfillmentCenterORM))
-        rows = result.scalars().all()
+    result = await session.execute(select(FulfillmentCenterORM))
+    rows = result.scalars().all()
     return [FulfillmentCenter.model_validate(r) for r in rows]

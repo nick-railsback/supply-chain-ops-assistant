@@ -84,7 +84,7 @@ engine = create_async_engine(DATABASE_URL, echo=False)
 async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
 
-async def get_db() -> AsyncGenerator[AsyncSession, None]:
+async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
 
@@ -123,7 +123,7 @@ async def list_shipments(
     date_to: str | None = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[Shipment]:
     """List shipments with optional filters and pagination."""
     query = select(ShipmentORM)
@@ -167,7 +167,7 @@ async def list_shipments(
 async def sla_breaches(
     offset: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=200),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> PaginatedResponse[Shipment]:
     """Shipments where sla_status is 'breached' or 'at_risk'."""
     condition = ShipmentORM.sla_status.in_(["breached", "at_risk"])
@@ -190,7 +190,7 @@ async def sla_breaches(
 @app.get("/shipments/by-order/{order_id}", response_model=list[Shipment])
 async def shipments_by_order(
     order_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> list[Shipment]:
     """Return shipments for a specific order."""
     query = select(ShipmentORM).where(ShipmentORM.order_id == order_id)
@@ -202,7 +202,7 @@ async def shipments_by_order(
 @app.get("/shipments/{shipment_id}", response_model=ShipmentWithTracking)
 async def get_shipment(
     shipment_id: str,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> ShipmentWithTracking:
     """Single shipment with tracking events. 404 if not found."""
     query = (
@@ -241,7 +241,7 @@ async def get_shipment(
 
 @app.get("/stats/carrier-performance", response_model=list[CarrierStats])
 async def carrier_performance(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> list[CarrierStats]:
     """Carrier stats computed via SQL aggregation."""
     # Count on-time (met + on_track) per carrier
@@ -313,7 +313,7 @@ async def carrier_performance(
 
 @app.get("/stats/sla-summary", response_model=SLASummary)
 async def sla_summary(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> SLASummary:
     """SLA compliance summary across shipments."""
     query = select(
@@ -365,7 +365,7 @@ async def sla_summary(
 async def update_shipment(
     shipment_id: str,
     body: ShipmentPatch,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
 ) -> Shipment:
     """Update shipment fields with typed validation."""
     query = select(ShipmentORM).where(ShipmentORM.shipment_id == shipment_id)
