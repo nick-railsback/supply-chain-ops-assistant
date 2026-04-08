@@ -37,3 +37,6 @@ _bmad/
 _bmad-output/
 
 .claude/
+
+# Local-only docs
+project-spec.md
