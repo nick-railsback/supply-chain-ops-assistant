@@ -1,6 +1,6 @@
 # Supply Chain Ops Assistant
 
-> A natural language operations copilot for supply chain teams -- query orders, inventory, and shipments across OMS, WMS, and TMS using plain English.
+> A supply-chain operations copilot — ask about orders, inventory, and shipments across OMS, WMS, and TMS in natural language. Interpretation runs on a deterministic rule-based layer today; a Claude tool-use interpreter is being layered in and measured against a labeled eval set (see [Evaluation](#evaluation)).
 
 ---
 
@@ -127,7 +127,7 @@ flowchart TD
 ### Option 1: Docker (recommended)
 
 ```bash
-git clone https://github.com/your-username/supply-chain-ops-assistant.git
+git clone https://github.com/nick-railsback/supply-chain-ops-assistant.git
 cd supply-chain-ops-assistant
 cp .env.example .env
 
@@ -140,7 +140,7 @@ The `docker compose` stack starts the three API services (OMS on `:8001`, WMS on
 ### Option 2: Local Development
 
 ```bash
-git clone https://github.com/your-username/supply-chain-ops-assistant.git
+git clone https://github.com/nick-railsback/supply-chain-ops-assistant.git
 cd supply-chain-ops-assistant
 cp .env.example .env
 
@@ -183,9 +183,9 @@ ops-copilot > Show me all pending orders
 
 ## How It Works
 
-Here is what happens when you type `Show me all pending orders` into the CLI:
+Here is what happens when you ask `what orders are pending`:
 
-**1. Interpretation.** The `QueryInterpreter` matches the input against a set of regex patterns. It detects the intent (`STATUS_CHECK`), the target system (`OMS`), the primary entity (`order`), and extracts a filter (`status = pending`). These are packed into a `QueryPlan` Pydantic model with a confidence score of `0.75`.
+**1. Interpretation.** The rule-based `QueryInterpreter` matches the input against keyword/regex patterns, detecting the intent (`STATUS_CHECK`), the target system (`OMS`), the primary entity (`order`), and a `status = pending` filter. These are packed into a `QueryPlan` Pydantic model:
 
 ```python
 QueryPlan(
@@ -193,10 +193,12 @@ QueryPlan(
     target_systems=[TargetSystem.OMS],
     primary_entity="order",
     filters=[DataFilter(field="status", operator="eq", value="pending")],
-    confidence=0.75,
+    confidence=0.75,  # fixed heuristic in rule mode; a per-query signal under the LLM interpreter
     reasoning="Rule-based match for 'order' query",
 )
 ```
+
+> **What's rule-based vs LLM today.** The rule layer is keyword-driven and recognizes a *subset* of phrasings. It matches `what orders are pending`, but a generic `show me … orders` phrasing currently resolves to an *unfiltered* order lookup (the generic pattern matches first), and free-form queries fall through to a clarification prompt. Lifting that ceiling — free-form phrasing, robust filter extraction, and a calibrated confidence signal — is exactly what the Claude tool-use interpreter adds. The [`evals/`](evals/) harness measures both paths against gold labels so the gap is quantified, not asserted.
 
 **2. Confidence Routing.** The `ConfidenceRouter` looks up the threshold for `status_check` intent: auto-execute at `0.75`, flag at `0.45`. Since `0.75 >= 0.75`, the decision is `EXECUTE` -- proceed without confirmation.
 
@@ -238,6 +240,8 @@ Not all intents carry equal risk. A `status_check` auto-executes at confidence `
 | `action_request` | 0.90 | 0.60 |
 | `report` | 0.75 | 0.45 |
 
+> **On calibration:** in rule-based mode the *input* confidence is a fixed heuristic (`0.75` for any matched pattern), so routing is effectively deterministic per intent. The threshold design above is real; the signal feeding it is not yet. The Claude interpreter emits a per-query confidence along with the discrete signals behind it (are all filter fields known? is the entity unambiguous?), and the [Evaluation](#evaluation) harness reports confidence against empirical accuracy so the claim is measured rather than asserted.
+
 ---
 
 ## Test Scenarios
@@ -256,6 +260,28 @@ The test suite includes 10 scenario files in `tests/scenarios/`, each defining a
 | 08 | WMS-TMS cross-system | "Show inventory items currently being shipped to fulfillment centers" | `cross_system_query` | WMS, TMS |
 | 09 | Order analysis by channel | "Analyze order volume and exception rates by sales channel" | `analysis` | OMS |
 | 10 | Bulk escalation | "Escalate all critical severity exceptions open for more than 24 hours" | `action_request` | OMS |
+
+---
+
+## Evaluation
+
+Interpreter quality is **measured, not asserted.** The harness in [`evals/`](evals/) scores natural-language → `QueryPlan` accuracy against gold labels in `evals/dataset.jsonl` (33 cases and growing) across two arms: the deterministic **rule-based** interpreter and the **Claude** interpreter.
+
+```bash
+make eval                          # rule arm (offline, no API key)
+make eval EVAL_ARGS="--arm both"   # comparative rule-vs-LLM lift table
+```
+
+**Current rule-based baseline (33 cases):**
+
+| Metric | Rule-based |
+|--------|-----------|
+| Intent accuracy | 52% (17/33) |
+| Target-system match | 52% (17/33) |
+| Filter extraction | 25% (3/12 pairs) |
+| Clarification precision / recall | 18% / 100% |
+
+These numbers are deliberately unflattering — they quantify exactly where a keyword/regex interpreter falls short. It drops filters it has no pattern for (`show me all pending orders` → *all* orders), misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies**: 100% clarification recall but 18% precision means it asks for clarification on most queries it can't pattern-match rather than answering them. The confidence "signal" collapses to two constants (`0.2` / `0.75`), so the reliability table has two rows — which is itself the finding. Closing this gap with a Claude tool-use interpreter, and reporting the lift here, is the active work (see [Evaluation harness](evals/)).
 
 ---
 
@@ -329,7 +355,7 @@ supply-chain-ops-assistant/
 |-------|-----------|-----------|
 | Language | Python 3.11+ | Async-first, strong typing with `|` union syntax, ecosystem depth |
 | Agent Orchestration | Custom Copilot class | Explicit pipeline stages, no framework lock-in, full auditability |
-| LLM Integration | Anthropic Claude (stubbed) | Prompt templates ready; rule-based fallback provides offline functionality |
+| LLM Integration | Anthropic Claude (rule-based default) | Rule-based interpreter is the working default; a Claude interpreter is attempted when `ANTHROPIC_API_KEY` is set and is being hardened to tool-use structured output. See [Evaluation](#evaluation). |
 | Data Validation | Pydantic v2 | Runtime type enforcement at every boundary, JSON schema generation |
 | Configuration | pydantic-settings | Typed env vars with `.env` file support and validation |
 | API Framework | FastAPI | Async-native, automatic OpenAPI docs, Pydantic integration |

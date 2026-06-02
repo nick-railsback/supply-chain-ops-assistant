@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test seed serve docker-up
+.PHONY: lint format typecheck test eval demo seed serve docker-up
 
 lint:
 	uv run ruff check .
@@ -11,6 +11,14 @@ typecheck:
 
 test:
 	uv run pytest
+
+# Interpreter eval. Default: rule arm (offline, no key). Compare arms with:
+#   make eval EVAL_ARGS="--arm both"
+eval:
+	uv run python -m evals.run_eval $(EVAL_ARGS)
+
+demo:
+	uv run python scripts/run_demo.py
 
 seed:
 	uv run python -m seed.seed_db --reset

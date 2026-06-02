@@ -1,8 +1,10 @@
-"""Query interpretation reasoner for natural language to QueryPlan.
+"""Query interpretation: natural language to a structured QueryPlan.
 
-Converts free-form user queries into structured QueryPlan objects.
-Currently uses a rule-based fallback; LLM integration is stubbed for
-future wiring once the Anthropic SDK is available.
+Two paths. A deterministic, rule-based interpreter (keyword/regex) is the
+default and recognizes a subset of phrasings. When an Anthropic API key is
+configured, an LLM interpreter is attempted first and falls back to the rule
+path on any error. The LLM path is being hardened to Claude tool-use with a
+real confidence signal; ``evals/`` measures both paths against gold labels.
 """
 
 from __future__ import annotations

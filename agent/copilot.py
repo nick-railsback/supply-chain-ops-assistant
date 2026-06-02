@@ -1,4 +1,4 @@
-"""AgentField copilot app setup and configuration.
+"""Supply Chain Ops Assistant copilot orchestrator.
 
 Provides the ``Copilot`` class that orchestrates query interpretation,
 confidence routing, validation, and execution.  Also contains the
@@ -14,16 +14,16 @@ from typing import Any
 
 from agent.confidence import ConfidenceRouter, RoutingDecision
 from agent.query_interpreter import _suggest_alternatives, interpret_query
-from agent.validators import validate_action_proposal, validate_query_plan
+from agent.validators import validate_query_plan
 from config.prompts import (
     CLARIFICATION_RESPONSE,
     EXECUTE_AND_FLAG_RESPONSE,
 )
 from config.settings import get_settings
-from models.action import ActionProposal, ActionType
+from models.action import ActionProposal
 from models.query import DataFilter, QueryPlan, QueryResult
-from models.report import ReportOutput, ReportSection
-from models.shared import RiskLevel, TargetSystem
+from models.report import ReportOutput
+from models.shared import TargetSystem
 from services.client import OpsClient
 
 logger = logging.getLogger(__name__)

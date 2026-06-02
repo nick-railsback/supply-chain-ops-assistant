@@ -43,7 +43,7 @@ async def check_services() -> bool:
             down = [n for n, h in zip(names, results) if not h]
             console.print(
                 f"\n[red]Error:[/red] {', '.join(down)} not responding. "
-                "Start services with: make services"
+                "Start services with: make serve"
             )
         return all_healthy
     finally:
@@ -81,7 +81,7 @@ async def run_scenario(
                 table.add_row(*["..." for _ in cols])
             console.print(table)
     elif status == "clarify":
-        console.print(f"[yellow]Status:[/yellow] clarification needed")
+        console.print("[yellow]Status:[/yellow] clarification needed")
         console.print(result.get("message", ""))
     else:
         console.print(f"[bold]{status}[/bold]: {result.get('message', '')}")
@@ -111,9 +111,11 @@ async def main() -> None:
         await run_scenario(
             copilot,
             "Scenario 1: Order Status Check",
-            "show me all pending orders",
+            "what orders are pending",
             "The copilot matched the 'pending orders' regex pattern and queried OMS "
-            "with status=pending filter.",
+            "with a status=pending filter. (Note: a generic 'show me ... orders' "
+            "phrasing matches the broader pattern first and would NOT apply the "
+            "filter — the kind of gap the LLM interpreter closes; see evals/.)",
         )
 
         # Scenario 2: Exception tracking
@@ -136,9 +138,10 @@ async def main() -> None:
         await run_scenario(
             copilot,
             "Scenario 4: Cross-System Query",
-            "show orders and shipments",
-            "Matched cross-system pattern, queried both OMS and TMS concurrently, "
-            "joined results on order_id.",
+            "correlate orders with shipments",
+            "Matched the cross-system pattern (a 'show ... orders' phrasing would "
+            "match the single-system pattern first), queried both OMS and TMS "
+            "concurrently, and joined results on order_id.",
         )
 
         # Scenario 5: Ambiguous query (triggers clarification)
@@ -154,10 +157,12 @@ async def main() -> None:
         Panel(
             "[bold green]Demo complete![/bold green]\n\n"
             "The copilot demonstrated:\n"
-            "  1. Natural language query understanding\n"
+            "  1. Rule-based query understanding (keyword/regex)\n"
             "  2. Cross-system data joining\n"
             "  3. Contextual clarification suggestions\n\n"
-            "For LLM-powered interpretation, set ANTHROPIC_API_KEY in .env",
+            "These ran offline on the rule-based interpreter. A Claude interpreter "
+            "(being hardened to tool-use) is attempted when ANTHROPIC_API_KEY is set "
+            "— see evals/ for the measured rule-vs-LLM accuracy gap.",
             title="Summary",
             border_style="green",
         )

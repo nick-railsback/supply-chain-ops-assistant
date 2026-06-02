@@ -33,7 +33,6 @@ class Settings(BaseSettings):
     api_secret_key: str = "dev-secret-key-change-me"
 
     # Service URLs
-    agentfield_url: str = "http://localhost:8080"
     oms_api_url: str = "http://localhost:8001"
     wms_api_url: str = "http://localhost:8002"
     tms_api_url: str = "http://localhost:8003"
