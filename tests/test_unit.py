@@ -45,6 +45,13 @@ class TestConfidenceRouter:
         plan = sample_query_plan(intent=UserIntent.STATUS_CHECK, confidence=0.45)
         assert router.route(plan) == RoutingDecision.EXECUTE_AND_FLAG
 
+    def test_clarification_needed_routes_to_clarify(self, sample_query_plan):
+        # clarification_needed has no per-intent threshold; routing must not
+        # crash looking one up — a clarification plan always asks the user.
+        router = ConfidenceRouter()
+        plan = sample_query_plan(intent=UserIntent.CLARIFICATION_NEEDED, confidence=0.2)
+        assert router.route(plan) == RoutingDecision.CLARIFY
+
 
 class TestValidation:
     async def test_valid_query_plan_passes(self, sample_query_plan):
