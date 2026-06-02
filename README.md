@@ -249,6 +249,22 @@ Not all intents carry equal risk. A `status_check` auto-executes at confidence `
 
 ---
 
+## Safety
+
+Because the assistant can *mutate* live systems — update order status, assign or resolve exceptions, escalate orders, flag shipments, bulk-update — the action path is deliberately fail-safe. It never defaults to "yes" on a write.
+
+**Confirmation is a hard gate.** Every `ActionProposal` carries `requires_confirmation` (default `True`). `execute_action` refuses to touch a backend when a proposal requires confirmation and hasn't been explicitly confirmed: it raises `ActionNotConfirmedError` *before* any mutation rather than proceeding. The library helper `confirm_action` auto-approves only proposals that don't require confirmation; anything riskier must be approved by a human, and the CLI's interactive prompt (`prompt_confirmation`) defaults to **No**.
+
+**Risk is assessed, not assumed.** `propose_action` grades each proposal: one target is `LOW`, 2–10 is `MEDIUM`, more than 10 is `HIGH`, and any irreversible status (`cancelled`, `returned`, `refunded`) forces `HIGH` regardless of count. Anything above `LOW` — or any proposal touching more than five targets — requires confirmation.
+
+**Bulk writes are capped.** A `BULK_UPDATE` affecting more than `settings.bulk_update_cap` (default 50) targets fails validation outright, so a misinterpreted "update all …" can't fan out unbounded.
+
+**Only valid state transitions are allowed.** Order status updates are checked against an explicit transition map (`validators.ORDER_STATUS_TRANSITIONS`): e.g. `pending → {confirmed, cancelled}` and `shipped → in_transit`, while terminal states (`cancelled`, `returned`) permit no onward transition. An update naming an illegal transition is rejected with the allowed set, and one that can't identify the order's *current* status is rejected too — the validator needs both ends of the transition.
+
+**Reads and writes gate on confidence differently.** A wrong read wastes a second; a wrong write escalates the wrong exception. So `action_request` carries the highest auto-execute threshold (`0.90`) — see [Per-Intent Confidence Thresholds](#per-intent-confidence-thresholds).
+
+---
+
 ## Test Scenarios
 
 The test suite includes 10 scenario files in `tests/scenarios/`, each defining a natural language query with expected behavior:

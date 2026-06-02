@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from agent.action_handler import _dispatch_action, execute_action
+from agent.action_handler import (
+    ActionNotConfirmedError,
+    _dispatch_action,
+    confirm_action,
+    execute_action,
+)
 from models.action import ActionProposal, ActionType
 from models.shared import RiskLevel
 
@@ -30,7 +35,7 @@ class TestExecuteAction:
             impact_summary="Update 1 order",
             risk_level=RiskLevel.LOW,
         )
-        result = await execute_action(client, proposal)
+        result = await execute_action(client, proposal, confirmed=True)
         assert result.total_targets == 1
         assert len(result.successful) == 1
         assert result.successful[0] == "ORD-2025-001"
@@ -50,7 +55,7 @@ class TestExecuteAction:
             impact_summary="Assign 1 exception",
             risk_level=RiskLevel.LOW,
         )
-        result = await execute_action(client, proposal)
+        result = await execute_action(client, proposal, confirmed=True)
         assert len(result.successful) == 1
         assert result.successful[0] == "EXC-001"
         client.update_exception.assert_called_once_with(
@@ -68,7 +73,7 @@ class TestExecuteAction:
             impact_summary="Update 2 shipments",
             risk_level=RiskLevel.MEDIUM,
         )
-        result = await execute_action(client, proposal)
+        result = await execute_action(client, proposal, confirmed=True)
         assert result.total_targets == 2
         assert len(result.successful) == 2
         assert client.update_shipment.call_count == 2
@@ -86,7 +91,7 @@ class TestExecuteAction:
             impact_summary="Update 2 orders",
             risk_level=RiskLevel.MEDIUM,
         )
-        result = await execute_action(client, proposal)
+        result = await execute_action(client, proposal, confirmed=True)
         assert result.total_targets == 2
         assert len(result.successful) == 1
         assert len(result.failed) == 1
@@ -105,3 +110,62 @@ class TestDispatchUnknownPrefix:
                 "UNKNOWN-123",
                 {"status": "foo"},
             )
+
+
+# ---------------------------------------------------------------------------
+# C4 — fail-safe confirmation gate
+# ---------------------------------------------------------------------------
+
+
+def _confirmable_proposal(requires_confirmation: bool = True) -> ActionProposal:
+    return ActionProposal(
+        action_type=ActionType.UPDATE_ORDER_STATUS,
+        target_ids=["ORD-2025-001"],
+        changes={"status": "processing"},
+        reasoning="Update order",
+        impact_summary="Update 1 order",
+        risk_level=RiskLevel.LOW,
+        requires_confirmation=requires_confirmation,
+    )
+
+
+class TestConfirmationGate:
+    async def test_execute_refuses_unconfirmed_proposal(self):
+        """A proposal requiring confirmation does not mutate without confirmed=True."""
+        client = _make_mock_client()
+        proposal = _confirmable_proposal(requires_confirmation=True)
+
+        with pytest.raises(ActionNotConfirmedError):
+            await execute_action(client, proposal)
+
+        client.update_order.assert_not_called()
+
+    async def test_execute_proceeds_when_confirmed(self):
+        """Explicit confirmed=True allows the mutation to proceed."""
+        client = _make_mock_client()
+        proposal = _confirmable_proposal(requires_confirmation=True)
+
+        result = await execute_action(client, proposal, confirmed=True)
+
+        assert result.successful == ["ORD-2025-001"]
+        client.update_order.assert_called_once()
+
+    async def test_execute_proceeds_when_confirmation_not_required(self):
+        """A proposal that doesn't require confirmation executes without confirmed."""
+        client = _make_mock_client()
+        proposal = _confirmable_proposal(requires_confirmation=False)
+
+        result = await execute_action(client, proposal)
+
+        assert result.successful == ["ORD-2025-001"]
+        client.update_order.assert_called_once()
+
+
+class TestConfirmActionFailSafe:
+    async def test_confirm_action_blocks_when_required(self):
+        """confirm_action never auto-approves a proposal that requires confirmation."""
+        assert await confirm_action(_confirmable_proposal(requires_confirmation=True)) is False
+
+    async def test_confirm_action_allows_when_not_required(self):
+        """confirm_action auto-approves only low-risk, no-confirmation-needed proposals."""
+        assert await confirm_action(_confirmable_proposal(requires_confirmation=False)) is True

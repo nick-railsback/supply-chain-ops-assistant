@@ -20,6 +20,17 @@ from services.client import OpsClient
 
 logger = logging.getLogger(__name__)
 
+
+class ActionNotConfirmedError(RuntimeError):
+    """Raised when ``execute_action`` is asked to run a proposal that requires
+    confirmation without explicit confirmation.
+
+    The library refuses to mutate backend systems on a risky proposal unless a
+    human (or an explicit ``confirmed=True``) has approved it — it never
+    defaults to "yes".
+    """
+
+
 # ---------------------------------------------------------------------------
 # Keyword → ActionType mapping (rule-based; LLM replaces this later)
 # ---------------------------------------------------------------------------
@@ -265,17 +276,17 @@ def format_proposal_summary(proposal: ActionProposal) -> str:
 
 
 async def confirm_action(proposal: ActionProposal) -> bool:
-    """Present a proposal for human confirmation.
+    """Decide whether a proposal may proceed *without* an interactive prompt.
 
-    Returns ``True`` if the action should proceed, ``False`` otherwise.
-
-    The actual CLI prompt is handled by the calling layer; this function
-    returns ``True`` by default so that automated / test flows pass through.
+    Fail-safe by default: auto-approve only proposals that don't require
+    confirmation (low-risk, small-batch — see ``propose_action``). Anything
+    that requires confirmation returns ``False`` so the caller must obtain
+    explicit human approval (the CLI does this via ``prompt_confirmation``).
+    The library never defaults to "yes" on a risky mutation.
     """
     summary = format_proposal_summary(proposal)
     logger.info("Action confirmation requested:\n%s", summary)
-    # Default: auto-confirm.  CLI layer overrides with interactive prompt.
-    return True
+    return not proposal.requires_confirmation
 
 
 # ===================================================================
@@ -286,13 +297,26 @@ async def confirm_action(proposal: ActionProposal) -> bool:
 async def execute_action(
     client: OpsClient,
     proposal: ActionProposal,
+    *,
+    confirmed: bool = False,
 ) -> ActionResult:
     """Execute a confirmed ActionProposal against backend services.
 
     Routes each target to the correct ``OpsClient`` update method based on
     ``proposal.action_type``, tracks per-target success/failure, and returns
     an ``ActionResult``.
+
+    Fail-safe gate: if ``proposal.requires_confirmation`` is set, this refuses
+    to mutate anything unless ``confirmed=True`` is passed explicitly (obtained
+    from ``confirm_action`` or the CLI's ``prompt_confirmation``). Otherwise it
+    raises ``ActionNotConfirmedError`` before touching any backend.
     """
+    if proposal.requires_confirmation and not confirmed:
+        raise ActionNotConfirmedError(
+            f"Refusing to execute {proposal.action_type.value}: proposal requires "
+            f"confirmation but was not confirmed."
+        )
+
     start = time.monotonic()
     successful: list[str] = []
     failed: list[dict[str, str]] = []
