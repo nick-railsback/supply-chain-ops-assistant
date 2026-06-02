@@ -8,6 +8,7 @@ import logging
 from datetime import UTC, datetime
 from typing import Any
 
+from agent.llm import LLMUnavailable, structured_call
 from config.prompts import GENERATE_REPORT_SYSTEM, GENERATE_REPORT_USER
 from models.report import ReportOutput, ReportSection
 from services.client import OpsClient
@@ -508,8 +509,6 @@ async def _enrich_with_llm(
         return report
 
     try:
-        import anthropic
-
         # Serialize report data for the LLM
         data_payload = json.dumps(report.model_dump(), default=str)
         prompt = GENERATE_REPORT_USER.format(
@@ -517,19 +516,18 @@ async def _enrich_with_llm(
             data_payload=data_payload,
         )
 
-        llm_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
-        message = await llm_client.messages.create(
-            model=settings.llm_model,
+        # Routed through the shared structured client (forced tool-use +
+        # guaranteed client teardown — see agent/llm.py).
+        llm_data, usage = await structured_call(
             system=GENERATE_REPORT_SYSTEM,
-            messages=[{"role": "user", "content": prompt}],
+            user=prompt,
+            tool_name="emit_report",
+            tool_description="Return the enriched structured operational report.",
+            input_schema=ReportOutput.model_json_schema(),
             max_tokens=2048,
         )
-        logger.debug("generate_report usage=%s", message.usage)
-        raw = next(
-            (b.text for b in message.content if isinstance(b, anthropic.types.TextBlock)),
-            "",
-        )
-        llm_report = ReportOutput.model_validate_json(raw)
+        logger.debug("generate_report usage=%s", usage)
+        llm_report = ReportOutput.model_validate(llm_data)
 
         # Merge LLM narrative into rule-based sections
         for i, section in enumerate(report.sections):
@@ -542,6 +540,8 @@ async def _enrich_with_llm(
             if item not in existing:
                 report.action_items.append(item)
 
+        return report
+    except LLMUnavailable:
         return report
     except Exception as exc:
         logger.warning("LLM report enrichment failed, returning rule-based report: %s", exc)

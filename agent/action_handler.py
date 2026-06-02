@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any
 
+from agent.llm import LLMUnavailable, structured_call
 from agent.validators import validate_action_proposal
 from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER  # noqa: F401
 from models.action import ActionProposal, ActionResult, ActionType
@@ -141,34 +142,35 @@ async def propose_action(
 
     settings = get_settings()
 
-    # Try LLM-based proposal generation
+    # Try LLM-based proposal generation, routed through the shared structured
+    # client (forced tool-use + guaranteed client teardown — see agent/llm.py).
     if settings.is_llm_available:
         try:
             import json
 
-            import anthropic
-
-            llm_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
             prompt = PROPOSE_ACTION_USER.format(
                 user_query=user_query,
                 relevant_data=json.dumps(relevant_data, default=str),
             )
-            message = await llm_client.messages.create(
-                model=settings.llm_model,
+            schema = ActionProposal.model_json_schema()
+            # current_status is server-injected validator-only metadata; the
+            # model must never emit it.
+            schema.get("properties", {}).pop("current_status", None)
+            data, usage = await structured_call(
                 system=PROPOSE_ACTION_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024,
+                user=prompt,
+                tool_name="emit_action_proposal",
+                tool_description="Return a safe, auditable ActionProposal for the user's request.",
+                input_schema=schema,
             )
-            logger.debug("propose_action usage=%s", message.usage)
-            raw = next(
-                (b.text for b in message.content if isinstance(b, anthropic.types.TextBlock)),
-                "",
-            )
-            proposal = ActionProposal.model_validate_json(raw)
+            logger.debug("propose_action usage=%s", usage)
+            proposal = ActionProposal.model_validate(data)
             errors = await validate_action_proposal(proposal)
             if errors:
                 raise ValueError(f"Action validation failed: {'; '.join(errors)}")
             return proposal
+        except LLMUnavailable:
+            pass  # fall through to the rule-based path
         except Exception as exc:
             logger.warning("LLM action proposal failed, falling back to rule-based: %s", exc)
 

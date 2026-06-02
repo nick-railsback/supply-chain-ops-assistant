@@ -1,5 +1,7 @@
 """Unit tests for pure functions in agent/action_handler.py (Story 15.4)."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from agent.action_handler import (
@@ -164,3 +166,54 @@ class TestProposeActionStatusUpdate:
 
         message = str(exc_info.value)
         assert "Invalid status transition" in message
+
+
+# ---------------------------------------------------------------------------
+# propose_action — LLM path lifecycle (#8)
+# ---------------------------------------------------------------------------
+
+
+class TestProposeActionLLM:
+    """The LLM proposal path must route through agent.llm.structured_call
+    (forced tool-use + guaranteed client teardown), never a hand-rolled
+    AsyncAnthropic client that leaks its httpx pool.
+    """
+
+    async def test_routes_through_structured_call(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+
+        tool_input = {
+            "action_type": "assign_exception",
+            "target_ids": ["EXC-001"],
+            "changes": {"assigned_to": "Sarah Chen"},
+            "reasoning": "LLM reasoning",
+            "impact_summary": "Assign 1 exception",
+            "risk_level": "low",
+            "requires_confirmation": False,
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        with (
+            patch("agent.action_handler.structured_call", call),
+            patch("anthropic.AsyncAnthropic") as raw_client,
+        ):
+            proposal = await propose_action(
+                None, "assign exception EXC-001 to Sarah Chen", [{"exception_id": "EXC-001"}]
+            )
+
+        call.assert_awaited_once()
+        raw_client.assert_not_called()
+        # The returned proposal is the LLM's (rule path would set a different reasoning).
+        assert proposal.reasoning == "LLM reasoning"
+        assert proposal.action_type == ActionType.ASSIGN_EXCEPTION
+
+    async def test_falls_back_to_rule_path_on_error(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+
+        call = AsyncMock(side_effect=RuntimeError("boom"))
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(
+                None, "assign exception EXC-001 to Sarah Chen", [{"exception_id": "EXC-001"}]
+            )
+
+        # Fell back to the rule path, which builds reasoning from the query.
+        assert proposal.reasoning.startswith("Action requested via:")

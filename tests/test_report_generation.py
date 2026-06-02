@@ -1,7 +1,7 @@
 """Tests for report generation builders (Story 15.7)."""
 
 from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from agent.report_generator import (
     ReportBuilder,
@@ -10,8 +10,10 @@ from agent.report_generator import (
     _build_daily_volume_trend_report,
     _build_exception_summary_report,
     _build_sla_compliance_report,
+    _enrich_with_llm,
     generate_report,
 )
+from config.settings import get_settings
 from models.oms import DailyStats, ExceptionSummary, OrderException
 from models.report import ReportOutput
 from models.shared import PaginatedResponse
@@ -307,6 +309,49 @@ class TestGenerateReport:
         report = await generate_report(client, "give me a random thing")
         assert isinstance(report, ReportOutput)
         assert report.report_type == "exception_summary"
+
+
+class TestEnrichReportLLM:
+    """#7: report enrichment must route through agent.llm.structured_call,
+    never a hand-rolled AsyncAnthropic client that leaks its httpx pool.
+    """
+
+    def _base_report(self):
+        builder = ReportBuilder("exception_summary", "Exception Summary")
+        builder.add_section("Overview", "rule-based content")
+        return builder.build()
+
+    async def test_routes_through_structured_call(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+
+        llm_dict = {
+            "report_type": "exception_summary",
+            "title": "Exception Summary",
+            "generated_at": "2026-06-02T00:00:00Z",
+            "sections": [{"title": "Overview", "content": "LLM narrative"}],
+            "action_items": ["LLM action item"],
+        }
+        call = AsyncMock(return_value=(llm_dict, {"input_tokens": 1, "output_tokens": 1}))
+        with (
+            patch("agent.report_generator.structured_call", call),
+            patch("anthropic.AsyncAnthropic") as raw_client,
+        ):
+            out = await _enrich_with_llm(self._base_report(), "exception report", {})
+
+        call.assert_awaited_once()
+        raw_client.assert_not_called()
+        assert out.sections[0].content == "LLM narrative"
+        assert "LLM action item" in out.action_items
+
+    async def test_falls_back_to_rule_report_on_error(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+
+        call = AsyncMock(side_effect=RuntimeError("boom"))
+        with patch("agent.report_generator.structured_call", call):
+            out = await _enrich_with_llm(self._base_report(), "exception report", {})
+
+        # Unchanged rule-based content on failure.
+        assert out.sections[0].content == "rule-based content"
 
 
 class TestReportBuilder:
