@@ -438,6 +438,15 @@ def render_reasoning_panel(plan: QueryPlan, routing: str, errors: list[str]) -> 
     rows.append(Text.assemble(("Systems:     ", "bold"), systems))
     rows.append(Text.assemble(("Routing:     ", "bold"), routing or "(n/a)"))
 
+    # Token usage + latency (LLM path only; rule fallback leaves these unset).
+    if plan.input_tokens is not None or plan.latency_ms is not None:
+        parts = []
+        if plan.input_tokens is not None:
+            parts.append(f"{plan.input_tokens} in / {plan.output_tokens} out")
+        if plan.latency_ms is not None:
+            parts.append(f"{plan.latency_ms:.0f}ms")
+        rows.append(Text.assemble(("Tokens:      ", "bold"), (" · ".join(parts), "dim")))
+
     if errors:
         rows.append(Text.assemble(("Validation:  ", "bold"), ("failed", "red")))
         rows.extend(Text(f"  - {err}", style="red") for err in errors)

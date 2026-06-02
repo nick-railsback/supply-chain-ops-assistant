@@ -50,6 +50,11 @@ class QueryPlan(BaseModel):
     confidence_signals: ConfidenceSignals | None = None
     model_confidence: float | None = None  # the model's own self-report, for comparison
 
+    # Observability — populated on the LLM path, None on the rule fallback.
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+    latency_ms: float | None = None
+
 
 class QueryResult(BaseModel):
     """Result envelope returned after executing a query plan."""

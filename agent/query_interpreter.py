@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from agent.llm import LLMUnavailable, structured_call
 from agent.validators import validate_query_plan
@@ -323,7 +324,13 @@ def _plan_from_tool_input(data: dict, source: str) -> QueryPlan:
     )
 
 
-async def _call_interpreter(system_prompt: str, user_prompt: str) -> dict:
+async def _call_interpreter(system_prompt: str, user_prompt: str) -> tuple[dict, dict]:
+    """Call the interpreter tool, returning (tool_input, metrics).
+
+    metrics carries input/output token counts and the wall-clock latency of the
+    call, for observability (logged here and surfaced on the QueryPlan).
+    """
+    start = time.monotonic()
     data, usage = await structured_call(
         system=system_prompt,
         user=user_prompt,
@@ -332,8 +339,30 @@ async def _call_interpreter(system_prompt: str, user_prompt: str) -> dict:
         input_schema=INTERPRET_TOOL_SCHEMA,
         temperature=0.0,
     )
-    logger.debug("interpret usage=%s", usage)
-    return data
+    metrics = {**usage, "latency_ms": round((time.monotonic() - start) * 1000, 1)}
+    logger.debug("interpret metrics=%s", metrics)
+    return data, metrics
+
+
+def _attach_metrics(plan: QueryPlan, metrics: dict) -> QueryPlan:
+    """Record token usage and latency on a plan (sum across repair attempts)."""
+    plan.input_tokens = metrics.get("input_tokens")
+    plan.output_tokens = metrics.get("output_tokens")
+    plan.latency_ms = metrics.get("latency_ms")
+    return plan
+
+
+def _combine_metrics(first: dict, second: dict) -> dict:
+    """Aggregate two interpreter calls (initial + repair) into one metrics dict."""
+
+    def _add(a: float | None, b: float | None) -> float | None:
+        return (a or 0) + (b or 0) if (a is not None or b is not None) else None
+
+    return {
+        "input_tokens": _add(first.get("input_tokens"), second.get("input_tokens")),
+        "output_tokens": _add(first.get("output_tokens"), second.get("output_tokens")),
+        "latency_ms": _add(first.get("latency_ms"), second.get("latency_ms")),
+    }
 
 
 async def llm_interpret(
@@ -343,12 +372,11 @@ async def llm_interpret(
     """Tool-use interpretation with ONE repair retry on validation failure."""
     system_prompt, user_prompt = _build_prompt(user_query, conversation_context)
 
-    plan = _plan_from_tool_input(
-        await _call_interpreter(system_prompt, user_prompt), source="llm"
-    )
+    data, metrics = await _call_interpreter(system_prompt, user_prompt)
+    plan = _plan_from_tool_input(data, source="llm")
     errors = await validate_query_plan(plan)
     if not errors:
-        return plan
+        return _attach_metrics(plan, metrics)
 
     # One repair attempt: feed the validator's complaints back to the model.
     repair_prompt = (
@@ -356,9 +384,9 @@ async def llm_interpret(
         + "\n".join(f"- {e}" for e in errors)
         + "\n\nReturn a corrected plan."
     )
-    plan = _plan_from_tool_input(
-        await _call_interpreter(system_prompt, repair_prompt), source="llm_repaired"
-    )
+    data, repair_metrics = await _call_interpreter(system_prompt, repair_prompt)
+    plan = _plan_from_tool_input(data, source="llm_repaired")
+    _attach_metrics(plan, _combine_metrics(metrics, repair_metrics))
     errors = await validate_query_plan(plan)
     if errors:
         raise ValueError(f"LLM plan failed validation after repair: {errors}")

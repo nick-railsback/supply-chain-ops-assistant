@@ -412,6 +412,7 @@ async def _enrich_with_llm(report: ReportOutput, report_request: str, data: dict
             messages=[{"role": "user", "content": prompt}],
             max_tokens=2048,
         )
+        logger.debug("generate_report usage=%s", message.usage)
         raw = next(
             (b.text for b in message.content if isinstance(b, anthropic.types.TextBlock)),
             "",

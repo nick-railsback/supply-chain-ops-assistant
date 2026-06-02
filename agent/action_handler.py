@@ -159,6 +159,7 @@ async def propose_action(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1024,
             )
+            logger.debug("propose_action usage=%s", message.usage)
             raw = next(
                 (b.text for b in message.content if isinstance(b, anthropic.types.TextBlock)),
                 "",
