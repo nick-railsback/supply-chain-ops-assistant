@@ -4,6 +4,7 @@ from enum import StrEnum
 
 from config.settings import get_settings
 from models.query import QueryPlan
+from models.shared import UserIntent
 
 
 class RoutingDecision(StrEnum):
@@ -28,6 +29,12 @@ class ConfidenceRouter:
 
     def route(self, plan: QueryPlan) -> RoutingDecision:
         """Determine routing decision for the given query plan."""
+        # A clarification_needed plan has no per-intent threshold and, by
+        # definition, cannot proceed — always ask the user. Guard before the
+        # threshold lookup, which would otherwise KeyError on this intent.
+        if plan.intent is UserIntent.CLARIFICATION_NEEDED:
+            return RoutingDecision.CLARIFY
+
         threshold = self.settings.get_threshold(plan.intent.value)
 
         if plan.confidence >= threshold.auto:

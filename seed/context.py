@@ -23,9 +23,7 @@ class SeedContext:
     # Order tracking
     orders: dict[str, dict] = field(default_factory=dict)  # order_id -> order data
     shipped_order_ids: list[str] = field(default_factory=list)
-    order_center_map: dict[str, str] = field(
-        default_factory=dict
-    )  # order_id -> center_id
+    order_center_map: dict[str, str] = field(default_factory=dict)  # order_id -> center_id
 
     # SKU tracking
     backordered_skus: set[str] = field(default_factory=set)
@@ -34,9 +32,7 @@ class SeedContext:
     )  # sku -> {center_id: qty}
 
     # Shipment tracking
-    shipment_order_map: dict[str, str] = field(
-        default_factory=dict
-    )  # shipment_id -> order_id
+    shipment_order_map: dict[str, str] = field(default_factory=dict)  # shipment_id -> order_id
     sla_breach_order_ids: list[str] = field(default_factory=list)
 
     # Exception tracking
@@ -56,9 +52,7 @@ class SeedContext:
         """Mark a SKU as backordered."""
         self.backordered_skus.add(sku)
 
-    def register_allocation(
-        self, sku: str, center_id: str, quantity: int
-    ) -> None:
+    def register_allocation(self, sku: str, center_id: str, quantity: int) -> None:
         """Track allocated quantity for a SKU at a center."""
         if sku not in self.sku_allocated_qty:
             self.sku_allocated_qty[sku] = {}

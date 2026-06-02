@@ -1,10 +1,7 @@
 """Tests for rule-based query interpreter (Story 15.6)."""
 
-import pytest
-
 from agent.query_interpreter import _rule_based_interpret, interpret_query
 from models.shared import TargetSystem, UserIntent
-
 
 # ---------------------------------------------------------------------------
 # _rule_based_interpret tests
@@ -27,11 +24,15 @@ class TestRuleBasedInterpret:
         assert any(f.field == "status" and f.value == "pending" for f in plan.filters)
 
     def test_at_risk_orders(self):
-        plan = _rule_based_interpret("which orders are at-risk")
-        assert plan is not None
-        assert plan.intent == UserIntent.STATUS_CHECK
-        assert TargetSystem.OMS in plan.target_systems
-        assert any(f.field == "at_risk" and f.value is True for f in plan.filters)
+        # Both phrasings must emit the at_risk filter. "show at-risk orders"
+        # also contains show+orders, so it must not be shadowed by the generic
+        # "show ... orders" pattern (which would silently drop the filter).
+        for query in ("which orders are at-risk", "show at-risk orders"):
+            plan = _rule_based_interpret(query)
+            assert plan is not None, query
+            assert plan.intent == UserIntent.STATUS_CHECK
+            assert TargetSystem.OMS in plan.target_systems
+            assert any(f.field == "at_risk" and f.value is True for f in plan.filters), query
 
     def test_show_exceptions(self):
         plan = _rule_based_interpret("show all exceptions")
@@ -52,9 +53,7 @@ class TestRuleBasedInterpret:
         assert plan is not None
         assert plan.intent == UserIntent.STATUS_CHECK
         assert TargetSystem.WMS in plan.target_systems
-        assert any(
-            f.field == "below_reorder_point" and f.value is True for f in plan.filters
-        )
+        assert any(f.field == "below_reorder_point" and f.value is True for f in plan.filters)
 
     def test_show_shipments(self):
         plan = _rule_based_interpret("show shipments")
@@ -68,9 +67,7 @@ class TestRuleBasedInterpret:
         assert plan is not None
         assert plan.intent == UserIntent.STATUS_CHECK
         assert TargetSystem.TMS in plan.target_systems
-        assert any(
-            f.field == "sla_status" and f.value == "breached" for f in plan.filters
-        )
+        assert any(f.field == "sla_status" and f.value == "breached" for f in plan.filters)
 
     def test_cross_system_orders_shipments(self):
         plan = _rule_based_interpret("correlate orders with shipments data")

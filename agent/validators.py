@@ -24,6 +24,7 @@ FIELD_REGISTRY: dict[tuple[str, str, str], str] = {
     ("oms", "order", "date_range_end"): "date",
     ("oms", "order", "order_value"): "numeric",
     ("oms", "order", "priority"): "enum",
+    ("oms", "order", "at_risk"): "boolean",
     # OMS — exceptions
     ("oms", "exception", "exception_type"): "enum",
     ("oms", "exception", "severity"): "enum",
@@ -65,28 +66,16 @@ VALID_OPERATORS: dict[str, list[str]] = {
 # Order status transition map
 # ---------------------------------------------------------------------------
 
+# Keys and values are real OrderStatus members only (see models/oms.py).
+# delivered and cancelled are terminal.
 ORDER_STATUS_TRANSITIONS: dict[str, list[str]] = {
-    "pending": ["confirmed", "cancelled"],
-    "confirmed": ["processing", "cancelled"],
-    "processing": ["shipped", "cancelled"],
-    "shipped": ["in_transit"],
-    "in_transit": ["delivered", "exception"],
-    "delivered": ["returned"],
+    "pending": ["processing", "cancelled"],
+    "processing": ["shipped", "cancelled", "exception"],
+    "shipped": ["delivered", "exception"],
+    "delivered": [],
     "exception": ["processing", "cancelled"],
     "cancelled": [],
-    "returned": [],
 }
-
-# ---------------------------------------------------------------------------
-# Map target system to entity name used in the field registry
-# ---------------------------------------------------------------------------
-
-_SYSTEM_ENTITY_MAP: dict[str, str] = {
-    "oms": "order",
-    "wms": "inventory",
-    "tms": "shipment",
-}
-
 
 # ---------------------------------------------------------------------------
 # Validators
@@ -108,11 +97,19 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
     for f in plan.filters:
         matched = False
         for system in plan.target_systems:
-            entity = _SYSTEM_ENTITY_MAP.get(system.value, plan.primary_entity)
-            key = (system.value, entity, f.field)
-            if key in FIELD_REGISTRY:
+            # A system can host more than one entity (oms → orders AND
+            # exceptions), so match the field against any entity registered
+            # under it rather than a single hard-coded entity.
+            field_type = next(
+                (
+                    ftype
+                    for (sys, _entity, field), ftype in FIELD_REGISTRY.items()
+                    if sys == system.value and field == f.field
+                ),
+                None,
+            )
+            if field_type is not None:
                 matched = True
-                field_type = FIELD_REGISTRY[key]
                 valid_ops = VALID_OPERATORS.get(field_type, [])
                 if f.operator not in valid_ops:
                     errors.append(
@@ -124,8 +121,7 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
 
         if not matched and plan.target_systems:
             errors.append(
-                f"Unknown field '{f.field}' for systems "
-                f"{[s.value for s in plan.target_systems]}."
+                f"Unknown field '{f.field}' for systems {[s.value for s in plan.target_systems]}."
             )
 
     # Cross-system query must specify a join key
@@ -160,7 +156,7 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
     # Status transition validation for order status updates
     if proposal.action_type == ActionType.UPDATE_ORDER_STATUS:
         new_status = proposal.changes.get("status")
-        current_status = proposal.changes.get("current_status")
+        current_status = proposal.current_status
 
         if new_status and current_status:
             allowed = ORDER_STATUS_TRANSITIONS.get(current_status, [])
@@ -171,7 +167,7 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
                 )
         elif new_status and not current_status:
             errors.append(
-                "Status update requires 'current_status' in changes to validate transition."
+                "Status update requires current_status to validate the transition."
             )
 
     return errors

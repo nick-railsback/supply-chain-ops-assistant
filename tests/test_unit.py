@@ -45,6 +45,13 @@ class TestConfidenceRouter:
         plan = sample_query_plan(intent=UserIntent.STATUS_CHECK, confidence=0.45)
         assert router.route(plan) == RoutingDecision.EXECUTE_AND_FLAG
 
+    def test_clarification_needed_routes_to_clarify(self, sample_query_plan):
+        # clarification_needed has no per-intent threshold; routing must not
+        # crash looking one up — a clarification plan always asks the user.
+        router = ConfidenceRouter()
+        plan = sample_query_plan(intent=UserIntent.CLARIFICATION_NEEDED, confidence=0.2)
+        assert router.route(plan) == RoutingDecision.CLARIFY
+
 
 class TestValidation:
     async def test_valid_query_plan_passes(self, sample_query_plan):
@@ -91,6 +98,38 @@ class TestValidation:
     async def test_valid_action_proposal_passes(self, sample_action_proposal):
         proposal = sample_action_proposal()
         errors = await validate_action_proposal(proposal)
+        assert errors == []
+
+    async def test_oms_exception_filter_fields_validate(self, sample_query_plan):
+        """OMS hosts both orders and exceptions; exception fields must validate."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[
+                DataFilter(field="severity", operator="eq", value="critical"),
+                DataFilter(field="date_from", operator="gte", value="2026-01-01"),
+            ],
+        )
+        errors = await validate_query_plan(plan)
+        assert errors == []
+
+    async def test_unknown_oms_field_still_rejected(self, sample_query_plan):
+        """A field that exists under no OMS entity is still flagged."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="not_a_real_field", operator="eq", value="x")],
+        )
+        errors = await validate_query_plan(plan)
+        assert any("not_a_real_field" in e for e in errors)
+
+    async def test_at_risk_filter_field_validates(self, sample_query_plan):
+        """The rule interpreter emits DataFilter(field='at_risk') for at-risk
+        queries; the OMS order schema must accept it, or validation rejects the
+        plan before the at_risk dispatch branch can run."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="at_risk", operator="eq", value=True)],
+        )
+        errors = await validate_query_plan(plan)
         assert errors == []
 
 

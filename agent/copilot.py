@@ -1,4 +1,4 @@
-"""AgentField copilot app setup and configuration.
+"""Supply Chain Ops Assistant copilot orchestrator.
 
 Provides the ``Copilot`` class that orchestrates query interpretation,
 confidence routing, validation, and execution.  Also contains the
@@ -13,17 +13,17 @@ import logging
 from typing import Any
 
 from agent.confidence import ConfidenceRouter, RoutingDecision
-from agent.query_interpreter import _suggest_alternatives, interpret_query
-from agent.validators import validate_action_proposal, validate_query_plan
+from agent.query_interpreter import _suggest_alternatives, _summarize_plan, interpret_query
+from agent.validators import validate_query_plan
 from config.prompts import (
     CLARIFICATION_RESPONSE,
     EXECUTE_AND_FLAG_RESPONSE,
 )
 from config.settings import get_settings
-from models.action import ActionProposal, ActionType
+from models.action import ActionProposal
 from models.query import DataFilter, QueryPlan, QueryResult
-from models.report import ReportOutput, ReportSection
-from models.shared import RiskLevel, TargetSystem
+from models.report import ReportOutput
+from models.shared import TargetSystem
 from services.client import OpsClient
 
 logger = logging.getLogger(__name__)
@@ -144,7 +144,9 @@ class Copilot:
             message = f"Query executed successfully. {result.total_count} result(s) returned."
             status = "success"
 
-        self._update_history("assistant", message)
+        # Record the interpretation (not the user-facing message) so the next
+        # turn can resolve references like "those" / "the same ones".
+        self._update_history("assistant", _summarize_plan(plan))
         return {
             "status": status,
             "plan": plan,
@@ -176,9 +178,7 @@ class Copilot:
     # Report generation
     # ------------------------------------------------------------------
 
-    async def generate_report(
-        self, report_request: str, data: dict[str, Any]
-    ) -> ReportOutput:
+    async def generate_report(self, report_request: str, data: dict[str, Any]) -> ReportOutput:
         """Generate a structured report from a request and data payload.
 
         Delegates to ``report_generator.generate_report`` which produces
@@ -194,9 +194,7 @@ class Copilot:
 # ===================================================================
 
 
-def _extract_filters(
-    filters: list[DataFilter], target_field: str
-) -> Any | None:
+def _extract_filters(filters: list[DataFilter], target_field: str) -> Any | None:
     """Return the value of the first filter matching *target_field*."""
     for f in filters:
         if f.field == target_field:

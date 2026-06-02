@@ -222,7 +222,7 @@ def _map_orders(
                 "channel": o["channel"],
                 "created_at": o["created_at"],
                 "updated_at": o["updated_at"],
-                "promised_delivery_date": None,
+                "promised_delivery_date": o.get("promised_delivery_date"),
                 "fulfillment_center_id": o["fulfillment_center_id"],
                 "total_value": round(order_totals.get(oid, 0.0), 2),
                 "currency": "USD",
@@ -365,9 +365,7 @@ def _map_tracking_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 # ---------------------------------------------------------------------------
 
 
-async def _create_tables(
-    metadata: sa.MetaData, db_path: Path, *, drop_first: bool = False
-) -> None:
+async def _create_tables(metadata: sa.MetaData, db_path: Path, *, drop_first: bool = False) -> None:
     engine = create_async_engine(_url(db_path))
     async with engine.begin() as conn:
         if drop_first:
@@ -376,9 +374,7 @@ async def _create_tables(
     await engine.dispose()
 
 
-async def _insert_rows(
-    table: sa.Table, rows: list[dict[str, Any]], db_path: Path
-) -> None:
+async def _insert_rows(table: sa.Table, rows: list[dict[str, Any]], db_path: Path) -> None:
     if not rows:
         return
     engine = create_async_engine(_url(db_path))

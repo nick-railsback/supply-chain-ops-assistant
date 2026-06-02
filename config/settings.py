@@ -33,13 +33,15 @@ class Settings(BaseSettings):
     api_secret_key: str = "dev-secret-key-change-me"
 
     # Service URLs
-    agentfield_url: str = "http://localhost:8080"
     oms_api_url: str = "http://localhost:8001"
     wms_api_url: str = "http://localhost:8002"
     tms_api_url: str = "http://localhost:8003"
 
     # LLM
-    llm_model: str = "claude-sonnet-4-20250514"
+    # Haiku 4.5 is the dev/default: fast and cheap for a structured classifier,
+    # and a defensible production choice. The headline eval run uses Sonnet 4.6
+    # (`make eval EVAL_ARGS="--arm both"` with LLM_MODEL=claude-sonnet-4-6).
+    llm_model: str = "claude-haiku-4-5-20251001"
 
     # HTTP Client
     http_connect_timeout: float = 3.0
@@ -72,9 +74,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_api_key(self) -> "Settings":
         if self.llm_enabled and self.anthropic_api_key == "not-set":
-            logger.warning(
-                "ANTHROPIC_API_KEY is not set. LLM features will be unavailable."
-            )
+            logger.warning("ANTHROPIC_API_KEY is not set. LLM features will be unavailable.")
         return self
 
 

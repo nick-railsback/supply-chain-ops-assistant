@@ -66,9 +66,7 @@ class TrackingEventORM(Base):
     __tablename__ = "tracking_events"
 
     event_id: Mapped[str] = mapped_column(String, primary_key=True)
-    shipment_id: Mapped[str] = mapped_column(
-        String, ForeignKey("shipments.shipment_id")
-    )
+    shipment_id: Mapped[str] = mapped_column(String, ForeignKey("shipments.shipment_id"))
     timestamp: Mapped[str] = mapped_column(String)
     location: Mapped[str] = mapped_column(String)
     status: Mapped[str] = mapped_column(String)
@@ -217,9 +215,7 @@ async def get_shipment(
         "actual_delivery": shipment.actual_delivery,
         "sla_target": shipment.sla_target,
         "sla_status": shipment.sla_status,
-        "tracking_events": [
-            TrackingEvent.model_validate(e) for e in shipment.tracking_events
-        ],
+        "tracking_events": [TrackingEvent.model_validate(e) for e in shipment.tracking_events],
     }
     return ShipmentWithTracking.model_validate(data)
 
@@ -240,14 +236,11 @@ async def carrier_performance(
         .subquery()
     )
 
-    query = (
-        select(
-            ShipmentORM.carrier,
-            func.count().label("total_shipments"),
-            func.avg(ShipmentORM.shipping_cost).label("avg_cost"),
-        )
-        .group_by(ShipmentORM.carrier)
-    )
+    query = select(
+        ShipmentORM.carrier,
+        func.count().label("total_shipments"),
+        func.avg(ShipmentORM.shipping_cost).label("avg_cost"),
+    ).group_by(ShipmentORM.carrier)
 
     result = await db.execute(query)
     carrier_rows = result.all()

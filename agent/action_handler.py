@@ -12,6 +12,7 @@ import logging
 import time
 from typing import Any
 
+from agent.llm import LLMUnavailable, structured_call
 from agent.validators import validate_action_proposal
 from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER  # noqa: F401
 from models.action import ActionProposal, ActionResult, ActionType
@@ -19,6 +20,17 @@ from models.shared import RiskLevel
 from services.client import OpsClient
 
 logger = logging.getLogger(__name__)
+
+
+class ActionNotConfirmedError(RuntimeError):
+    """Raised when ``execute_action`` is asked to run a proposal that requires
+    confirmation without explicit confirmation.
+
+    The library refuses to mutate backend systems on a risky proposal unless a
+    human (or an explicit ``confirmed=True``) has approved it — it never
+    defaults to "yes".
+    """
+
 
 # ---------------------------------------------------------------------------
 # Keyword → ActionType mapping (rule-based; LLM replaces this later)
@@ -130,29 +142,35 @@ async def propose_action(
 
     settings = get_settings()
 
-    # Try LLM-based proposal generation
+    # Try LLM-based proposal generation, routed through the shared structured
+    # client (forced tool-use + guaranteed client teardown — see agent/llm.py).
     if settings.is_llm_available:
         try:
             import json
 
-            import anthropic
-
-            llm_client = anthropic.AsyncAnthropic(api_key=settings.anthropic_api_key)
             prompt = PROPOSE_ACTION_USER.format(
                 user_query=user_query,
                 relevant_data=json.dumps(relevant_data, default=str),
             )
-            message = await llm_client.messages.create(
-                model=settings.llm_model,
+            schema = ActionProposal.model_json_schema()
+            # current_status is server-injected validator-only metadata; the
+            # model must never emit it.
+            schema.get("properties", {}).pop("current_status", None)
+            data, usage = await structured_call(
                 system=PROPOSE_ACTION_SYSTEM,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=1024,
+                user=prompt,
+                tool_name="emit_action_proposal",
+                tool_description="Return a safe, auditable ActionProposal for the user's request.",
+                input_schema=schema,
             )
-            proposal = ActionProposal.model_validate_json(message.content[0].text)
+            logger.debug("propose_action usage=%s", usage)
+            proposal = ActionProposal.model_validate(data)
             errors = await validate_action_proposal(proposal)
             if errors:
                 raise ValueError(f"Action validation failed: {'; '.join(errors)}")
             return proposal
+        except LLMUnavailable:
+            pass  # fall through to the rule-based path
         except Exception as exc:
             logger.warning("LLM action proposal failed, falling back to rule-based: %s", exc)
 
@@ -171,6 +189,18 @@ async def propose_action(
     changes: dict[str, Any] = {}
     if relevant_data:
         changes = relevant_data[0].get("changes", {})
+
+    # Status updates need the order's current status to validate the transition.
+    # Capture it as validator-only metadata (ActionProposal.current_status) from
+    # the target row — never into `changes`, so it can't leak onto the wire, into
+    # the impact summary, or into the human-facing proposal summary.
+    current_status: str | None = None
+    if (
+        action_type == ActionType.UPDATE_ORDER_STATUS
+        and changes.get("status")
+        and relevant_data
+    ):
+        current_status = relevant_data[0].get("status")
 
     target_count = len(target_ids)
     risk = _assess_risk(target_count, changes)
@@ -191,6 +221,7 @@ async def propose_action(
         impact_summary=impact,
         risk_level=risk,
         requires_confirmation=risk != RiskLevel.LOW or target_count > 5,
+        current_status=current_status,
     )
 
     errors = await validate_action_proposal(proposal)
@@ -247,17 +278,17 @@ def format_proposal_summary(proposal: ActionProposal) -> str:
 
 
 async def confirm_action(proposal: ActionProposal) -> bool:
-    """Present a proposal for human confirmation.
+    """Decide whether a proposal may proceed *without* an interactive prompt.
 
-    Returns ``True`` if the action should proceed, ``False`` otherwise.
-
-    The actual CLI prompt is handled by the calling layer; this function
-    returns ``True`` by default so that automated / test flows pass through.
+    Fail-safe by default: auto-approve only proposals that don't require
+    confirmation (low-risk, small-batch — see ``propose_action``). Anything
+    that requires confirmation returns ``False`` so the caller must obtain
+    explicit human approval (the CLI does this via ``prompt_confirmation``).
+    The library never defaults to "yes" on a risky mutation.
     """
     summary = format_proposal_summary(proposal)
     logger.info("Action confirmation requested:\n%s", summary)
-    # Default: auto-confirm.  CLI layer overrides with interactive prompt.
-    return True
+    return not proposal.requires_confirmation
 
 
 # ===================================================================
@@ -268,13 +299,26 @@ async def confirm_action(proposal: ActionProposal) -> bool:
 async def execute_action(
     client: OpsClient,
     proposal: ActionProposal,
+    *,
+    confirmed: bool = False,
 ) -> ActionResult:
     """Execute a confirmed ActionProposal against backend services.
 
     Routes each target to the correct ``OpsClient`` update method based on
     ``proposal.action_type``, tracks per-target success/failure, and returns
     an ``ActionResult``.
+
+    Fail-safe gate: if ``proposal.requires_confirmation`` is set, this refuses
+    to mutate anything unless ``confirmed=True`` is passed explicitly (obtained
+    from ``confirm_action`` or the CLI's ``prompt_confirmation``). Otherwise it
+    raises ``ActionNotConfirmedError`` before touching any backend.
     """
+    if proposal.requires_confirmation and not confirmed:
+        raise ActionNotConfirmedError(
+            f"Refusing to execute {proposal.action_type.value}: proposal requires "
+            f"confirmation but was not confirmed."
+        )
+
     start = time.monotonic()
     successful: list[str] = []
     failed: list[dict[str, str]] = []
@@ -337,8 +381,7 @@ async def _dispatch_action(
             await client.update_shipment(target_id, changes)
         else:
             raise ValueError(
-                f"Cannot route bulk update for target '{target_id}': "
-                f"unknown ID prefix."
+                f"Cannot route bulk update for target '{target_id}': unknown ID prefix."
             )
     else:
         raise ValueError(f"Unsupported action type: {action_type}")

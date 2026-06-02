@@ -14,6 +14,7 @@ from rich.text import Text
 
 from agent.copilot import Copilot
 from models.action import ActionProposal
+from models.query import ConfidenceSignals, QueryPlan
 from models.report import ReportOutput
 from models.shared import RiskLevel
 from services.client import OpsClient
@@ -207,11 +208,60 @@ def format_carrier_stats_table(stats: list[dict[str, Any]]) -> Table:
     return table
 
 
+_SYSTEM_PREFIX_LABELS: dict[str, str] = {"oms_": "OMS", "wms_": "WMS", "tms_": "TMS"}
+
+
+def _humanize_cross_system_key(key: str) -> str:
+    """Turn a prefixed join field (``oms_status``) into a header (``OMS Status``)."""
+    for prefix, label in _SYSTEM_PREFIX_LABELS.items():
+        if key.startswith(prefix):
+            field = key[len(prefix) :].replace("_", " ").title()
+            return f"{label} {field}"
+    return key.replace("_", " ").title()
+
+
+def format_cross_system_table(rows: list[dict[str, Any]]) -> Table:
+    """Build a Rich table from correlated cross-system rows.
+
+    Correlated rows carry system-prefixed keys (``oms_status``, ``tms_carrier``)
+    produced by ``copilot._correlate_cross_system``. Columns are derived
+    dynamically from whichever systems and fields are present, so both sides of
+    the join render instead of being dropped by a single-system formatter.
+    """
+    table = Table(title="Cross-System Results", show_lines=False, expand=True)
+
+    # Preserve first-seen key order across all rows for stable columns.
+    columns: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+
+    for key in columns:
+        table.add_column(_humanize_cross_system_key(key))
+
+    for row in rows:
+        cells: list[Any] = []
+        for key in columns:
+            value = row.get(key, "")
+            if key.endswith("status"):
+                cells.append(_colorize(str(value)))
+            else:
+                cells.append(str(value))
+        table.add_row(*cells)
+
+    return table
+
+
 def _detect_data_type(items: list[dict[str, Any]]) -> str:
     """Heuristically detect the entity type from the first item's keys."""
     if not items:
         return "unknown"
     first = items[0]
+    # Correlated cross-system rows carry system-prefixed keys (oms_/wms_/tms_);
+    # detect them first so they don't fall through to a single-system formatter.
+    if any(k.startswith(("oms_", "wms_", "tms_")) for k in first):
+        return "cross_system"
     if "order_id" in first and "exception_type" in first:
         return "exceptions"
     if "order_id" in first and "total_value" in first:
@@ -248,6 +298,7 @@ def format_query_result(result: dict[str, Any]) -> Panel | Table | str:
         "inventory": format_inventory_table,
         "shipments": format_shipments_table,
         "carrier_stats": format_carrier_stats_table,
+        "cross_system": format_cross_system_table,
     }
 
     formatter = formatter_map.get(data_type)
@@ -298,9 +349,7 @@ def render_report(report: ReportOutput) -> Panel:
 
         # Highlight callout
         if section.highlight:
-            renderables.append(
-                Text(f"  \u26a0 {section.highlight}", style="bold yellow")
-            )
+            renderables.append(Text(f"  \u26a0 {section.highlight}", style="bold yellow"))
 
         # Data table
         if section.data_table:
@@ -318,6 +367,93 @@ def render_report(report: ReportOutput) -> Panel:
         Group(*renderables),
         title=f"[bold]{report.title}[/bold]",
         border_style="green",
+        expand=True,
+    )
+
+
+# ===================================================================
+# Reasoning panel  (C1 — surface the interpret/route/validate pipeline)
+# ===================================================================
+
+# Color per interpretation source so the LLM-vs-fallback choice is visible live.
+_SOURCE_COLORS: dict[str, str] = {
+    "llm": "green",
+    "llm_repaired": "cyan",
+    "rule_based": "yellow",
+    "fallback": "red",
+}
+
+
+def _signal_items(signals: ConfidenceSignals) -> list[tuple[str, bool]]:
+    """Flatten ConfidenceSignals into (label, value) pairs for display."""
+    return [
+        ("all filter fields known", signals.all_filter_fields_known),
+        ("entity unambiguous", signals.entity_unambiguous),
+        ("single clear intent", signals.single_clear_intent),
+        ("time reference resolved", signals.time_reference_resolved),
+    ]
+
+
+def render_reasoning_panel(plan: QueryPlan, routing: str, errors: list[str]) -> Panel:
+    """Render the interpret -> route -> validate pipeline for a single turn.
+
+    Surfaces the work ``copilot.process_query`` does but the result view drops:
+    the intent, how it was interpreted (LLM vs rule fallback), the confidence
+    and the signals behind it, the routing decision, and the validation outcome.
+    """
+    source = plan.interpretation_source
+    source_color = _SOURCE_COLORS.get(source, "white")
+
+    conf_color = (
+        "green" if plan.confidence >= 0.75 else "yellow" if plan.confidence >= 0.45 else "red"
+    )
+
+    rows: list[Any] = [
+        Text.assemble(("Intent:      ", "bold"), plan.intent.value),
+        Text.assemble(("Source:      ", "bold"), (source, f"bold {source_color}")),
+        Text.assemble(("Confidence:  ", "bold"), (f"{plan.confidence:.0%}", conf_color)),
+    ]
+    if plan.model_confidence is not None:
+        rows.append(
+            Text.assemble(
+                ("Self-report: ", "bold"),
+                (f"{plan.model_confidence:.0%}", "dim"),
+            )
+        )
+
+    if plan.confidence_signals is not None:
+        rows.append(Text("Signals:", style="bold"))
+        for label, value in _signal_items(plan.confidence_signals):
+            mark = "✓" if value else "✗"
+            mark_color = "green" if value else "red"
+            rows.append(Text.assemble("  ", (f"{mark} ", mark_color), label))
+
+    systems = ", ".join(s.value for s in plan.target_systems) or "(none)"
+    rows.append(Text.assemble(("Systems:     ", "bold"), systems))
+    rows.append(Text.assemble(("Routing:     ", "bold"), routing or "(n/a)"))
+
+    # Token usage + latency (LLM path only; rule fallback leaves these unset).
+    if plan.input_tokens is not None or plan.latency_ms is not None:
+        parts = []
+        if plan.input_tokens is not None:
+            parts.append(f"{plan.input_tokens} in / {plan.output_tokens} out")
+        if plan.latency_ms is not None:
+            parts.append(f"{plan.latency_ms:.0f}ms")
+        rows.append(Text.assemble(("Tokens:      ", "bold"), (" · ".join(parts), "dim")))
+
+    if errors:
+        rows.append(Text.assemble(("Validation:  ", "bold"), ("failed", "red")))
+        rows.extend(Text(f"  - {err}", style="red") for err in errors)
+    else:
+        rows.append(Text.assemble(("Validation:  ", "bold"), ("passed", "green")))
+
+    rows.append(Text(""))
+    rows.append(Text(f"Reasoning: {plan.reasoning}", style="dim italic"))
+
+    return Panel(
+        Group(*rows),
+        title="[bold]Reasoning[/bold]",
+        border_style=source_color,
         expand=True,
     )
 
@@ -353,15 +489,11 @@ def display_action_proposal(proposal: ActionProposal) -> Panel:
         renderables.append(Text(""))
 
     # Target IDs
-    renderables.append(
-        Text(f"  Targets ({len(proposal.target_ids)}):", style="bold")
-    )
+    renderables.append(Text(f"  Targets ({len(proposal.target_ids)}):", style="bold"))
     for tid in proposal.target_ids[:20]:
         renderables.append(Text(f"    {tid}"))
     if len(proposal.target_ids) > 20:
-        renderables.append(
-            Text(f"    ... and {len(proposal.target_ids) - 20} more", style="dim")
-        )
+        renderables.append(Text(f"    ... and {len(proposal.target_ids) - 20} more", style="dim"))
 
     return Panel(
         Group(*renderables),
@@ -401,10 +533,11 @@ _HELP_TEXT = """\
   "Show low stock inventory items"
 
 [bold]Commands[/bold]
-  /help     Show this help message
-  /status   Re-check API health status
-  /history  Show recent queries from this session
-  /exit     Exit the assistant
+  /help       Show this help message
+  /status     Re-check API health status
+  /history    Show recent queries from this session
+  /reasoning  Toggle the per-turn reasoning panel
+  /exit       Exit the assistant
 """
 
 
@@ -415,6 +548,7 @@ class InteractiveCLI:
         self.console = Console()
         self.copilot: Copilot | None = None
         self.history: list[str] = []
+        self.show_reasoning: bool = True
 
     async def _check_health(self) -> dict[str, bool]:
         """Ping each API /health endpoint and return a service-name -> healthy mapping."""
@@ -510,6 +644,11 @@ class InteractiveCLI:
                 for i, q in enumerate(recent, 1):
                     self.console.print(f"  {i}. {q}")
 
+        elif command == "/reasoning":
+            self.show_reasoning = not self.show_reasoning
+            state = "on" if self.show_reasoning else "off"
+            self.console.print(f"[dim]Reasoning panel {state}.[/dim]")
+
         elif command == "/exit":
             self.console.print("Goodbye!")
             raise SystemExit(0)
@@ -536,6 +675,13 @@ class InteractiveCLI:
 
         status = result.get("status", "error")
         message = result.get("message", "")
+
+        # Surface the interpret -> route -> validate pipeline for the turn.
+        plan = result.get("plan")
+        if plan is not None and self.show_reasoning:
+            self.console.print(
+                render_reasoning_panel(plan, result.get("routing", ""), result.get("errors", []))
+            )
 
         if status == "clarify":
             self.console.print(f"[yellow]{message}[/yellow]")

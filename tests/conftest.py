@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 import httpx
 import pytest
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import StaticPool
 
 from models.action import ActionProposal, ActionType
@@ -16,6 +16,7 @@ from models.shared import RiskLevel, TargetSystem, UserIntent
 @pytest.fixture
 def sample_query_plan():
     """Factory for QueryPlan objects."""
+
     def _make(
         intent=UserIntent.STATUS_CHECK,
         target_systems=None,
@@ -32,12 +33,14 @@ def sample_query_plan():
             reasoning="Test query plan",
             **kwargs,
         )
+
     return _make
 
 
 @pytest.fixture
 def sample_action_proposal():
     """Factory for ActionProposal objects."""
+
     def _make(
         action_type=ActionType.UPDATE_EXCEPTION,
         target_ids=None,
@@ -53,12 +56,14 @@ def sample_action_proposal():
             risk_level=risk_level,
             **kwargs,
         )
+
     return _make
 
 
 @pytest.fixture
 def sample_report_output():
     """Factory for ReportOutput objects."""
+
     def _make(**kwargs):
         return ReportOutput(
             report_type="exception_summary",
@@ -73,6 +78,7 @@ def sample_report_output():
             action_items=["Review open exceptions"],
             **kwargs,
         )
+
     return _make
 
 
@@ -197,15 +203,87 @@ async def oms_app():
 
         # Seed line items
         line_items = [
-            LineItemORM(line_item_id="LI-00000001", order_id="ORD-2025-001", sku="SKU-A100", product_name="Widget A", quantity=2, unit_price=50.00, status="pending"),
-            LineItemORM(line_item_id="LI-00000002", order_id="ORD-2025-001", sku="SKU-B200", product_name="Widget B", quantity=1, unit_price=50.00, status="pending"),
-            LineItemORM(line_item_id="LI-00000003", order_id="ORD-2025-002", sku="SKU-A100", product_name="Widget A", quantity=1, unit_price=200.00, status="pending"),
-            LineItemORM(line_item_id="LI-00000004", order_id="ORD-2025-003", sku="SKU-C300", product_name="Widget C", quantity=3, unit_price=100.00, status="allocated"),
-            LineItemORM(line_item_id="LI-00000005", order_id="ORD-2025-003", sku="SKU-A100", product_name="Widget A", quantity=1, unit_price=100.00, status="allocated"),
-            LineItemORM(line_item_id="LI-00000006", order_id="ORD-2025-003", sku="SKU-B200", product_name="Widget B", quantity=1, unit_price=100.00, status="picked"),
-            LineItemORM(line_item_id="LI-00000007", order_id="ORD-2025-004", sku="SKU-A100", product_name="Widget A", quantity=2, unit_price=100.00, status="shipped"),
-            LineItemORM(line_item_id="LI-00000008", order_id="ORD-2025-004", sku="SKU-D400", product_name="Widget D", quantity=1, unit_price=100.00, status="shipped"),
-            LineItemORM(line_item_id="LI-00000009", order_id="ORD-2025-005", sku="SKU-B200", product_name="Widget B", quantity=1, unit_price=100.00, status="delivered"),
+            LineItemORM(
+                line_item_id="LI-00000001",
+                order_id="ORD-2025-001",
+                sku="SKU-A100",
+                product_name="Widget A",
+                quantity=2,
+                unit_price=50.00,
+                status="pending",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000002",
+                order_id="ORD-2025-001",
+                sku="SKU-B200",
+                product_name="Widget B",
+                quantity=1,
+                unit_price=50.00,
+                status="pending",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000003",
+                order_id="ORD-2025-002",
+                sku="SKU-A100",
+                product_name="Widget A",
+                quantity=1,
+                unit_price=200.00,
+                status="pending",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000004",
+                order_id="ORD-2025-003",
+                sku="SKU-C300",
+                product_name="Widget C",
+                quantity=3,
+                unit_price=100.00,
+                status="allocated",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000005",
+                order_id="ORD-2025-003",
+                sku="SKU-A100",
+                product_name="Widget A",
+                quantity=1,
+                unit_price=100.00,
+                status="allocated",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000006",
+                order_id="ORD-2025-003",
+                sku="SKU-B200",
+                product_name="Widget B",
+                quantity=1,
+                unit_price=100.00,
+                status="picked",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000007",
+                order_id="ORD-2025-004",
+                sku="SKU-A100",
+                product_name="Widget A",
+                quantity=2,
+                unit_price=100.00,
+                status="shipped",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000008",
+                order_id="ORD-2025-004",
+                sku="SKU-D400",
+                product_name="Widget D",
+                quantity=1,
+                unit_price=100.00,
+                status="shipped",
+            ),
+            LineItemORM(
+                line_item_id="LI-00000009",
+                order_id="ORD-2025-005",
+                sku="SKU-B200",
+                product_name="Widget B",
+                quantity=1,
+                unit_price=100.00,
+                status="delivered",
+            ),
         ]
         session.add_all(line_items)
 
@@ -537,24 +615,122 @@ async def tms_app():
         # Seed tracking events (2-3 per shipment)
         events = [
             # Shipment 1
-            TrackingEventORM(event_id="EVT-001", shipment_id="SHP-20250301-00001", timestamp="2025-03-01T10:00:00", location="New York, NY", status="label_created", description="Shipping label created"),
-            TrackingEventORM(event_id="EVT-002", shipment_id="SHP-20250301-00001", timestamp="2025-03-02T08:00:00", location="Newark, NJ", status="in_transit", description="Package picked up"),
-            TrackingEventORM(event_id="EVT-003", shipment_id="SHP-20250301-00001", timestamp="2025-03-03T14:00:00", location="Philadelphia, PA", status="in_transit", description="In transit to destination"),
+            TrackingEventORM(
+                event_id="EVT-001",
+                shipment_id="SHP-20250301-00001",
+                timestamp="2025-03-01T10:00:00",
+                location="New York, NY",
+                status="label_created",
+                description="Shipping label created",
+            ),
+            TrackingEventORM(
+                event_id="EVT-002",
+                shipment_id="SHP-20250301-00001",
+                timestamp="2025-03-02T08:00:00",
+                location="Newark, NJ",
+                status="in_transit",
+                description="Package picked up",
+            ),
+            TrackingEventORM(
+                event_id="EVT-003",
+                shipment_id="SHP-20250301-00001",
+                timestamp="2025-03-03T14:00:00",
+                location="Philadelphia, PA",
+                status="in_transit",
+                description="In transit to destination",
+            ),
             # Shipment 2
-            TrackingEventORM(event_id="EVT-004", shipment_id="SHP-20250302-00002", timestamp="2025-03-02T10:00:00", location="Los Angeles, CA", status="label_created", description="Shipping label created"),
-            TrackingEventORM(event_id="EVT-005", shipment_id="SHP-20250302-00002", timestamp="2025-03-03T12:00:00", location="Los Angeles, CA", status="in_transit", description="Package in transit"),
-            TrackingEventORM(event_id="EVT-006", shipment_id="SHP-20250302-00002", timestamp="2025-03-04T14:00:00", location="Beverly Hills, CA", status="delivered", description="Package delivered"),
+            TrackingEventORM(
+                event_id="EVT-004",
+                shipment_id="SHP-20250302-00002",
+                timestamp="2025-03-02T10:00:00",
+                location="Los Angeles, CA",
+                status="label_created",
+                description="Shipping label created",
+            ),
+            TrackingEventORM(
+                event_id="EVT-005",
+                shipment_id="SHP-20250302-00002",
+                timestamp="2025-03-03T12:00:00",
+                location="Los Angeles, CA",
+                status="in_transit",
+                description="Package in transit",
+            ),
+            TrackingEventORM(
+                event_id="EVT-006",
+                shipment_id="SHP-20250302-00002",
+                timestamp="2025-03-04T14:00:00",
+                location="Beverly Hills, CA",
+                status="delivered",
+                description="Package delivered",
+            ),
             # Shipment 3
-            TrackingEventORM(event_id="EVT-007", shipment_id="SHP-20250303-00003", timestamp="2025-03-03T10:00:00", location="New York, NY", status="label_created", description="Shipping label created"),
-            TrackingEventORM(event_id="EVT-008", shipment_id="SHP-20250303-00003", timestamp="2025-03-04T06:00:00", location="Cleveland, OH", status="in_transit", description="In transit"),
+            TrackingEventORM(
+                event_id="EVT-007",
+                shipment_id="SHP-20250303-00003",
+                timestamp="2025-03-03T10:00:00",
+                location="New York, NY",
+                status="label_created",
+                description="Shipping label created",
+            ),
+            TrackingEventORM(
+                event_id="EVT-008",
+                shipment_id="SHP-20250303-00003",
+                timestamp="2025-03-04T06:00:00",
+                location="Cleveland, OH",
+                status="in_transit",
+                description="In transit",
+            ),
             # Shipment 4
-            TrackingEventORM(event_id="EVT-009", shipment_id="SHP-20250304-00004", timestamp="2025-03-04T10:00:00", location="San Francisco, CA", status="label_created", description="Shipping label created"),
-            TrackingEventORM(event_id="EVT-010", shipment_id="SHP-20250304-00004", timestamp="2025-03-05T08:00:00", location="Phoenix, AZ", status="in_transit", description="In transit"),
-            TrackingEventORM(event_id="EVT-011", shipment_id="SHP-20250304-00004", timestamp="2025-03-06T10:00:00", location="Miami, FL", status="out_for_delivery", description="Out for delivery"),
+            TrackingEventORM(
+                event_id="EVT-009",
+                shipment_id="SHP-20250304-00004",
+                timestamp="2025-03-04T10:00:00",
+                location="San Francisco, CA",
+                status="label_created",
+                description="Shipping label created",
+            ),
+            TrackingEventORM(
+                event_id="EVT-010",
+                shipment_id="SHP-20250304-00004",
+                timestamp="2025-03-05T08:00:00",
+                location="Phoenix, AZ",
+                status="in_transit",
+                description="In transit",
+            ),
+            TrackingEventORM(
+                event_id="EVT-011",
+                shipment_id="SHP-20250304-00004",
+                timestamp="2025-03-06T10:00:00",
+                location="Miami, FL",
+                status="out_for_delivery",
+                description="Out for delivery",
+            ),
             # Shipment 5
-            TrackingEventORM(event_id="EVT-012", shipment_id="SHP-20250305-00005", timestamp="2025-03-05T10:00:00", location="New York, NY", status="label_created", description="Shipping label created"),
-            TrackingEventORM(event_id="EVT-013", shipment_id="SHP-20250305-00005", timestamp="2025-03-07T14:00:00", location="Hartford, CT", status="in_transit", description="In transit"),
-            TrackingEventORM(event_id="EVT-014", shipment_id="SHP-20250305-00005", timestamp="2025-03-09T12:00:00", location="Boston, MA", status="delivered", description="Delivered"),
+            TrackingEventORM(
+                event_id="EVT-012",
+                shipment_id="SHP-20250305-00005",
+                timestamp="2025-03-05T10:00:00",
+                location="New York, NY",
+                status="label_created",
+                description="Shipping label created",
+            ),
+            TrackingEventORM(
+                event_id="EVT-013",
+                shipment_id="SHP-20250305-00005",
+                timestamp="2025-03-07T14:00:00",
+                location="Hartford, CT",
+                status="in_transit",
+                description="In transit",
+            ),
+            TrackingEventORM(
+                event_id="EVT-014",
+                shipment_id="SHP-20250305-00005",
+                timestamp="2025-03-09T12:00:00",
+                location="Boston, MA",
+                status="delivered",
+                description="Delivered",
+            ),
         ]
         session.add_all(events)
         await session.commit()

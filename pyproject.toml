@@ -5,6 +5,7 @@ description = "AI operations copilot for supply chain teams — natural language
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.40",
     "fastapi",
     "uvicorn[standard]",
     "pydantic>=2.11",
@@ -35,6 +36,11 @@ exclude = ["_bmad", ".claude"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
+
+[tool.ruff.lint.isort]
+# Keep aliased imports in the same grouped `from x import (...)` block rather
+# than splitting each `import as` onto its own statement.
+combine-as-imports = true
 
 [tool.mypy]
 python_version = "3.11"

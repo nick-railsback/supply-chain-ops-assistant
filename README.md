@@ -1,6 +1,6 @@
 # Supply Chain Ops Assistant
 
-> A natural language operations copilot for supply chain teams -- query orders, inventory, and shipments across OMS, WMS, and TMS using plain English.
+> A supply-chain operations copilot — ask about orders, inventory, and shipments across OMS, WMS, and TMS in natural language. A Claude **tool-use** interpreter (Haiku 4.5) turns free-form queries into a validated, typed query plan, with a deterministic rule-based interpreter as a typed fallback. Interpreter quality is measured against a labeled eval set — the LLM lifts intent accuracy from 52% to 100% on a 33-case gold set (see [Evaluation](#evaluation)).
 
 ---
 
@@ -127,7 +127,7 @@ flowchart TD
 ### Option 1: Docker (recommended)
 
 ```bash
-git clone https://github.com/your-username/supply-chain-ops-assistant.git
+git clone https://github.com/nick-railsback/supply-chain-ops-assistant.git
 cd supply-chain-ops-assistant
 cp .env.example .env
 
@@ -140,7 +140,7 @@ The `docker compose` stack starts the three API services (OMS on `:8001`, WMS on
 ### Option 2: Local Development
 
 ```bash
-git clone https://github.com/your-username/supply-chain-ops-assistant.git
+git clone https://github.com/nick-railsback/supply-chain-ops-assistant.git
 cd supply-chain-ops-assistant
 cp .env.example .env
 
@@ -183,9 +183,9 @@ ops-copilot > Show me all pending orders
 
 ## How It Works
 
-Here is what happens when you type `Show me all pending orders` into the CLI:
+Here is what happens when you ask `what orders are pending`:
 
-**1. Interpretation.** The `QueryInterpreter` matches the input against a set of regex patterns. It detects the intent (`STATUS_CHECK`), the target system (`OMS`), the primary entity (`order`), and extracts a filter (`status = pending`). These are packed into a `QueryPlan` Pydantic model with a confidence score of `0.75`.
+**1. Interpretation.** The `QueryInterpreter` calls Claude with a single forced tool (`emit_query_plan`), so the interpretation comes back as schema-valid arguments — there is no free-text JSON to parse. The model classifies the intent (`STATUS_CHECK`), target system (`OMS`), primary entity (`order`), and a `status = pending` filter, and emits the confidence *signals* behind its read. If the LLM is unavailable, a deterministic rule-based interpreter produces the same shape; either way the path is recorded on `interpretation_source`. The result is a `QueryPlan` Pydantic model:
 
 ```python
 QueryPlan(
@@ -193,10 +193,17 @@ QueryPlan(
     target_systems=[TargetSystem.OMS],
     primary_entity="order",
     filters=[DataFilter(field="status", operator="eq", value="pending")],
-    confidence=0.75,
-    reasoning="Rule-based match for 'order' query",
+    confidence=0.99,  # derived from emitted signals, not a constant
+    reasoning="User is asking for orders in pending status.",
+    interpretation_source="llm",
+    confidence_signals=ConfidenceSignals(
+        single_clear_intent=True, entity_unambiguous=True,
+        all_filter_fields_known=True, time_reference_resolved=True,
+    ),
 )
 ```
+
+> **LLM interpreter, rule fallback.** When an `ANTHROPIC_API_KEY` is set, Claude tool-use is the default interpreter; the rule layer (keyword/regex, a *subset* of phrasings) is a typed fallback for when the key is absent or a call fails. Which path produced a plan is recorded on `interpretation_source`, so a fallback is never silent. The lift is measured, not asserted: on the 33-case gold set the LLM raises intent accuracy from 52% → 100% and clarification precision from 18% → 100% (see [Evaluation](#evaluation)).
 
 **2. Confidence Routing.** The `ConfidenceRouter` looks up the threshold for `status_check` intent: auto-execute at `0.75`, flag at `0.45`. Since `0.75 >= 0.75`, the decision is `EXECUTE` -- proceed without confirmation.
 
@@ -213,6 +220,8 @@ QueryPlan(
 ### Single Agent vs Multi-Agent
 
 A multi-agent architecture (separate agents for OMS, WMS, TMS) would add coordination overhead without proportional benefit. The query space is well-defined: three systems, known entities, predictable filter patterns. A single agent with a dispatcher can handle cross-system queries via `asyncio.gather` without the complexity of inter-agent messaging. The confidence router provides the only meaningful branching logic, and it operates on explicit numeric thresholds rather than LLM-generated decisions.
+
+**When I'd reach for multi-agent.** The single-agent choice is a fit for *this* problem, not a dogma. I'd revisit it when the boundary conditions change: (1) genuinely independent, long-running sub-tasks that benefit from concurrent reasoning (e.g. an agent investigating a carrier dispute while another reconciles inventory) rather than the fan-out-then-join this does today; (2) divergent toolsets large enough that a single system prompt and tool schema stop fitting the model's working set, so per-domain agents with focused tools interpret more reliably; (3) separate trust or safety domains — an agent that can mutate financial records shouldn't share a context window with one answering open-ended questions; and (4) sub-tasks needing different models (a cheap classifier feeding an expensive planner). Short of those, the orchestration tax — message passing, partial-failure handling, non-determinism across agents — costs more than it returns here, and a typed dispatcher is easier to test and reason about.
 
 ### Mock APIs via HTTP vs Direct Database Access
 
@@ -238,6 +247,24 @@ Not all intents carry equal risk. A `status_check` auto-executes at confidence `
 | `action_request` | 0.90 | 0.60 |
 | `report` | 0.75 | 0.45 |
 
+> **On calibration:** the rule fallback emits a fixed heuristic confidence (`0.75` for any matched pattern), so routing under it is effectively deterministic per intent. The Claude interpreter is better: confidence is *derived deterministically from named signals* the model emits — `single_clear_intent`, `entity_unambiguous`, `all_filter_fields_known`, `time_reference_resolved` — so it is explainable rather than a magic number. The [Evaluation](#evaluation) harness then reports confidence against empirical accuracy, so the claim is measured. (That table surfaced a real finding — see Evaluation — that the smaller, cheaper model is *more* accurate here, and the larger model's main weakness is over-clarification rather than miscalibration.)
+
+---
+
+## Safety
+
+Because the assistant can *mutate* live systems — update order status, assign or resolve exceptions, escalate orders, flag shipments, bulk-update — the action path is deliberately fail-safe. It never defaults to "yes" on a write.
+
+**Confirmation is a hard gate.** Every `ActionProposal` carries `requires_confirmation` (default `True`). `execute_action` refuses to touch a backend when a proposal requires confirmation and hasn't been explicitly confirmed: it raises `ActionNotConfirmedError` *before* any mutation rather than proceeding. The library helper `confirm_action` auto-approves only proposals that don't require confirmation; anything riskier must be approved by a human, and the CLI's interactive prompt (`prompt_confirmation`) defaults to **No**.
+
+**Risk is assessed, not assumed.** `propose_action` grades each proposal: one target is `LOW`, 2–10 is `MEDIUM`, more than 10 is `HIGH`, and any irreversible status (`cancelled`, `returned`, `refunded`) forces `HIGH` regardless of count. Anything above `LOW` — or any proposal touching more than five targets — requires confirmation.
+
+**Bulk writes are capped.** A `BULK_UPDATE` affecting more than `settings.bulk_update_cap` (default 50) targets fails validation outright, so a misinterpreted "update all …" can't fan out unbounded.
+
+**Only valid state transitions are allowed.** Order status updates are checked against an explicit transition map (`validators.ORDER_STATUS_TRANSITIONS`): e.g. `pending → {confirmed, cancelled}` and `shipped → in_transit`, while terminal states (`cancelled`, `returned`) permit no onward transition. An update naming an illegal transition is rejected with the allowed set, and one that can't identify the order's *current* status is rejected too — the validator needs both ends of the transition.
+
+**Reads and writes gate on confidence differently.** A wrong read wastes a second; a wrong write escalates the wrong exception. So `action_request` carries the highest auto-execute threshold (`0.90`) — see [Per-Intent Confidence Thresholds](#per-intent-confidence-thresholds).
+
 ---
 
 ## Test Scenarios
@@ -259,6 +286,33 @@ The test suite includes 10 scenario files in `tests/scenarios/`, each defining a
 
 ---
 
+## Evaluation
+
+Interpreter quality is **measured, not asserted.** The harness in [`evals/`](evals/) scores natural-language → `QueryPlan` accuracy against gold labels in `evals/dataset.jsonl` (33 cases and growing) across three arms: the deterministic **rule-based** fallback, and the **Claude tool-use** interpreter on **Haiku 4.5** (default) and **Sonnet 4.6**.
+
+```bash
+make eval                                                   # rule arm (offline, no API key)
+make eval EVAL_ARGS="--arm both"                            # rule vs LLM (Haiku) lift table
+LLM_MODEL=claude-sonnet-4-6 make eval EVAL_ARGS="--arm llm" # Sonnet comparison
+```
+
+**Measured lift (33 cases, `temperature=0`):**
+
+| Metric | Rule | Haiku 4.5 | Sonnet 4.6 |
+|--------|------|-----------|-----------|
+| Intent accuracy | 52% | **100%** | 88% |
+| Target-system match (exact) | 52% | **97%** | 85% |
+| Filter extraction | 25% | **58%** | 58% |
+| Clarification precision | 18% | **100%** | 50% |
+| Clarification recall | 100% | 100% | 100% |
+| Cost / 33-case run | — | ~$0.07 | ~$0.25 |
+
+The rule baseline is deliberately unflattering: it drops filters it has no pattern for, misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies** (100% recall, 18% precision — it asks for clarification on most queries it can't pattern-match). Its confidence collapses to two constants (`0.2` / `0.75`), so its reliability table has two rows. The Claude interpreter closes that gap: forced tool-use returns schema-valid plans by construction, and confidence derived from emitted signals gives a reliability table that spans real bands.
+
+**A finding worth stating plainly: the cheaper, faster model won.** Haiku 4.5 matches or beats Sonnet 4.6 on every metric here — it ties on filter extraction (58%) and wins everywhere else, including intent (100% vs 88%) and target-system selection (97% vs 85%) — at ~⅓ the cost. Sonnet's main weakness is *over-clarification*: at 50% clarification precision, half the queries it flags as too-ambiguous-to-answer were actually answerable, whereas Haiku declines only the genuinely ambiguous ones (100% precision) without missing any (100% recall). Both models put most cases in their top confidence band and are mostly right there (Haiku 30 cases → 97%, Sonnet 27 → 93%), so the gap is accuracy, not calibration. For a structured-classification task against known systems, the smaller model is the right production default — which is why it is the default in `config/settings.py`. *(Caveat: N=33, one run per arm at `temperature=0`; the gold set is being expanded before treating this as definitive — 100% intent on 33 cases shows the rule→LLM gap is real here, not that the interpreter is infallible.)*
+
+---
+
 ## Project Structure
 
 ```
@@ -266,7 +320,8 @@ supply-chain-ops-assistant/
 |
 |-- agent/                        # Copilot agent layer
 |   |-- copilot.py                # Main orchestrator: interpret -> route -> validate -> execute
-|   |-- query_interpreter.py      # NL to QueryPlan (rule-based fallback, LLM-ready)
+|   |-- llm.py                    # Shared Claude tool-use client (forced tool_choice, caching)
+|   |-- query_interpreter.py      # NL to QueryPlan (Claude tool-use, rule-based fallback)
 |   |-- confidence.py             # Per-intent confidence routing with three outcomes
 |   |-- action_handler.py         # Action proposal generation for mutations
 |   |-- report_generator.py       # Structured report generation
@@ -329,7 +384,7 @@ supply-chain-ops-assistant/
 |-------|-----------|-----------|
 | Language | Python 3.11+ | Async-first, strong typing with `|` union syntax, ecosystem depth |
 | Agent Orchestration | Custom Copilot class | Explicit pipeline stages, no framework lock-in, full auditability |
-| LLM Integration | Anthropic Claude (stubbed) | Prompt templates ready; rule-based fallback provides offline functionality |
+| LLM Integration | Anthropic Claude (tool-use) | Claude is the default interpreter — forced `tool_choice` for schema-valid plans, prompt caching, `temperature=0` — on Haiku 4.5; the rule-based interpreter is a typed fallback. See [Evaluation](#evaluation). |
 | Data Validation | Pydantic v2 | Runtime type enforcement at every boundary, JSON schema generation |
 | Configuration | pydantic-settings | Typed env vars with `.env` file support and validation |
 | API Framework | FastAPI | Async-native, automatic OpenAPI docs, Pydantic integration |

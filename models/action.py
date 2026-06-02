@@ -29,6 +29,9 @@ class ActionProposal(BaseModel):
     impact_summary: str
     risk_level: RiskLevel
     requires_confirmation: bool = True
+    # Validator-only metadata: the entity's status before the change, used to
+    # validate the transition. Never dispatched (kept out of ``changes``).
+    current_status: str | None = None
 
 
 class ActionResult(BaseModel):

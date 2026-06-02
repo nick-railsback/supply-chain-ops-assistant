@@ -76,9 +76,7 @@ class LineItemORM(Base):
     unit_price: Mapped[float | None] = mapped_column(Float, nullable=True)
     status: Mapped[str | None] = mapped_column(String, nullable=True)
 
-    order: Mapped[OrderORM | None] = relationship(
-        "OrderORM", back_populates="line_items"
-    )
+    order: Mapped[OrderORM | None] = relationship("OrderORM", back_populates="line_items")
 
 
 class OrderExceptionORM(Base):
@@ -208,16 +206,12 @@ async def get_order(
     order_id: str,
     session: AsyncSession = Depends(get_session),
 ) -> OrderWithLineItems:
-    result = await session.execute(
-        select(OrderORM).where(OrderORM.order_id == order_id)
-    )
+    result = await session.execute(select(OrderORM).where(OrderORM.order_id == order_id))
     order = result.scalar_one_or_none()
     if order is None:
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
 
-    li_result = await session.execute(
-        select(LineItemORM).where(LineItemORM.order_id == order_id)
-    )
+    li_result = await session.execute(select(LineItemORM).where(LineItemORM.order_id == order_id))
     line_items_rows = li_result.scalars().all()
 
     order_data = Order.model_validate(order)
@@ -252,7 +246,9 @@ async def list_exceptions(
         filters.append(OrderExceptionORM.created_at <= date_to)
 
     query, count_query = apply_filters(query, count_query, filters)
-    return await build_paginated_response(session, query, count_query, OrderException, offset, limit)
+    return await build_paginated_response(
+        session, query, count_query, OrderException, offset, limit
+    )
 
 
 @app.get("/exceptions/summary", response_model=ExceptionSummary)
@@ -260,27 +256,23 @@ async def exception_summary(
     session: AsyncSession = Depends(get_session),
 ) -> ExceptionSummary:
     # By type
-    type_q = select(
-        OrderExceptionORM.exception_type, func.count()
-    ).group_by(OrderExceptionORM.exception_type)
+    type_q = select(OrderExceptionORM.exception_type, func.count()).group_by(
+        OrderExceptionORM.exception_type
+    )
     type_result = await session.execute(type_q)
     by_type: dict[str, int] = {
         str(row[0]): int(row[1]) for row in type_result.all() if row[0] is not None
     }
 
     # By severity
-    sev_q = select(
-        OrderExceptionORM.severity, func.count()
-    ).group_by(OrderExceptionORM.severity)
+    sev_q = select(OrderExceptionORM.severity, func.count()).group_by(OrderExceptionORM.severity)
     sev_result = await session.execute(sev_q)
     by_severity: dict[str, int] = {
         str(row[0]): int(row[1]) for row in sev_result.all() if row[0] is not None
     }
 
     # Open vs resolved
-    status_q = select(
-        OrderExceptionORM.status, func.count()
-    ).group_by(OrderExceptionORM.status)
+    status_q = select(OrderExceptionORM.status, func.count()).group_by(OrderExceptionORM.status)
     status_result = await session.execute(status_q)
     status_counts: dict[str, int] = {
         str(row[0]): int(row[1]) for row in status_result.all() if row[0] is not None
@@ -305,9 +297,7 @@ async def patch_order(
     body: OrderPatch,
     session: AsyncSession = Depends(get_session),
 ) -> Order:
-    result = await session.execute(
-        select(OrderORM).where(OrderORM.order_id == order_id)
-    )
+    result = await session.execute(select(OrderORM).where(OrderORM.order_id == order_id))
     order = result.scalar_one_or_none()
     if order is None:
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
@@ -330,15 +320,11 @@ async def patch_exception(
     session: AsyncSession = Depends(get_session),
 ) -> OrderException:
     result = await session.execute(
-        select(OrderExceptionORM).where(
-            OrderExceptionORM.exception_id == exception_id
-        )
+        select(OrderExceptionORM).where(OrderExceptionORM.exception_id == exception_id)
     )
     exc = result.scalar_one_or_none()
     if exc is None:
-        raise HTTPException(
-            status_code=404, detail=f"Exception {exception_id} not found"
-        )
+        raise HTTPException(status_code=404, detail=f"Exception {exception_id} not found")
 
     if body.status is not None:
         exc.status = body.status
@@ -364,9 +350,7 @@ async def daily_stats(
     start_str = start_date.isoformat()
     end_str = (today + timedelta(days=1)).isoformat()
 
-    order_q = select(
-        OrderORM.created_at, OrderORM.status, OrderORM.total_value
-    ).where(
+    order_q = select(OrderORM.created_at, OrderORM.status, OrderORM.total_value).where(
         OrderORM.created_at >= start_str,
         OrderORM.created_at < end_str,
     )
@@ -374,9 +358,7 @@ async def daily_stats(
     rows = result.all()
 
     # Exception counts by date
-    exc_q = select(
-        OrderExceptionORM.created_at
-    ).where(
+    exc_q = select(OrderExceptionORM.created_at).where(
         OrderExceptionORM.created_at >= start_str,
         OrderExceptionORM.created_at < end_str,
     )

@@ -3,8 +3,6 @@
 from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 from agent.report_generator import (
     ReportBuilder,
     _build_carrier_performance_report,
@@ -12,14 +10,15 @@ from agent.report_generator import (
     _build_daily_volume_trend_report,
     _build_exception_summary_report,
     _build_sla_compliance_report,
+    _enrich_with_llm,
     generate_report,
 )
+from config.settings import get_settings
 from models.oms import DailyStats, ExceptionSummary, OrderException
 from models.report import ReportOutput
 from models.shared import PaginatedResponse
 from models.tms import CarrierStats, Shipment, SLASummary
 from models.wms import FulfillmentCenter, InventoryItem
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock data
@@ -229,9 +228,7 @@ class TestExceptionSummaryReport:
         assert report.report_type == "exception_summary"
         assert len(report.sections) >= 2
         # Critical exception should generate an action item
-        critical_items = [
-            ai for ai in report.action_items if "critical" in ai.lower()
-        ]
+        critical_items = [ai for ai in report.action_items if "critical" in ai.lower()]
         assert len(critical_items) >= 1
         assert "EXC-001" in critical_items[0]
 
@@ -246,9 +243,7 @@ class TestSLAComplianceReport:
         report = _build_sla_compliance_report(data)
         assert report.report_type == "sla_compliance"
         # UPS at 85% should be flagged (below 90%)
-        low_perf_items = [
-            ai for ai in report.action_items if "UPS" in ai and "below 90%" in ai
-        ]
+        low_perf_items = [ai for ai in report.action_items if "UPS" in ai and "below 90%" in ai]
         assert len(low_perf_items) >= 1
 
 
@@ -274,9 +269,7 @@ class TestDailyVolumeTrendReport:
         report = _build_daily_volume_trend_report(data)
         assert report.report_type == "daily_volume_trend"
         # 150 vs 100 = 50% spike, should trigger action item
-        spike_items = [
-            ai for ai in report.action_items if "spike" in ai.lower()
-        ]
+        spike_items = [ai for ai in report.action_items if "spike" in ai.lower()]
         assert len(spike_items) >= 1
 
 
@@ -289,9 +282,7 @@ class TestCarrierPerformanceReport:
         report = _build_carrier_performance_report(data)
         assert report.report_type == "carrier_performance"
         # Best = FedEx (0.95), Worst = UPS (0.85) should be compared
-        comparison_items = [
-            ai for ai in report.action_items if "FedEx" in ai and "UPS" in ai
-        ]
+        comparison_items = [ai for ai in report.action_items if "FedEx" in ai and "UPS" in ai]
         assert len(comparison_items) >= 1
 
 
@@ -318,6 +309,49 @@ class TestGenerateReport:
         report = await generate_report(client, "give me a random thing")
         assert isinstance(report, ReportOutput)
         assert report.report_type == "exception_summary"
+
+
+class TestEnrichReportLLM:
+    """#7: report enrichment must route through agent.llm.structured_call,
+    never a hand-rolled AsyncAnthropic client that leaks its httpx pool.
+    """
+
+    def _base_report(self):
+        builder = ReportBuilder("exception_summary", "Exception Summary")
+        builder.add_section("Overview", "rule-based content")
+        return builder.build()
+
+    async def test_routes_through_structured_call(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+
+        llm_dict = {
+            "report_type": "exception_summary",
+            "title": "Exception Summary",
+            "generated_at": "2026-06-02T00:00:00Z",
+            "sections": [{"title": "Overview", "content": "LLM narrative"}],
+            "action_items": ["LLM action item"],
+        }
+        call = AsyncMock(return_value=(llm_dict, {"input_tokens": 1, "output_tokens": 1}))
+        with (
+            patch("agent.report_generator.structured_call", call),
+            patch("anthropic.AsyncAnthropic") as raw_client,
+        ):
+            out = await _enrich_with_llm(self._base_report(), "exception report", {})
+
+        call.assert_awaited_once()
+        raw_client.assert_not_called()
+        assert out.sections[0].content == "LLM narrative"
+        assert "LLM action item" in out.action_items
+
+    async def test_falls_back_to_rule_report_on_error(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+
+        call = AsyncMock(side_effect=RuntimeError("boom"))
+        with patch("agent.report_generator.structured_call", call):
+            out = await _enrich_with_llm(self._base_report(), "exception report", {})
+
+        # Unchanged rule-based content on failure.
+        assert out.sections[0].content == "rule-based content"
 
 
 class TestReportBuilder:
