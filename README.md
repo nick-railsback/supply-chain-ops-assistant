@@ -1,6 +1,6 @@
 # Supply Chain Ops Assistant
 
-> A supply-chain operations copilot — ask about orders, inventory, and shipments across OMS, WMS, and TMS in natural language. A Claude **tool-use** interpreter (Haiku 4.5) turns free-form queries into a validated, typed query plan, with a deterministic rule-based interpreter as a typed fallback. Interpreter quality is measured against a labeled eval set — the LLM lifts intent accuracy from 52% to 97% (see [Evaluation](#evaluation)).
+> A supply-chain operations copilot — ask about orders, inventory, and shipments across OMS, WMS, and TMS in natural language. A Claude **tool-use** interpreter (Haiku 4.5) turns free-form queries into a validated, typed query plan, with a deterministic rule-based interpreter as a typed fallback. Interpreter quality is measured against a labeled eval set — the LLM lifts intent accuracy from 52% to 100% on a 33-case gold set (see [Evaluation](#evaluation)).
 
 ---
 
@@ -203,7 +203,7 @@ QueryPlan(
 )
 ```
 
-> **LLM interpreter, rule fallback.** When an `ANTHROPIC_API_KEY` is set, Claude tool-use is the default interpreter; the rule layer (keyword/regex, a *subset* of phrasings) is a typed fallback for when the key is absent or a call fails. Which path produced a plan is recorded on `interpretation_source`, so a fallback is never silent. The lift is measured, not asserted: on the 33-case gold set the LLM raises intent accuracy from 52% → 97% and clarification precision from 18% → 75% (see [Evaluation](#evaluation)).
+> **LLM interpreter, rule fallback.** When an `ANTHROPIC_API_KEY` is set, Claude tool-use is the default interpreter; the rule layer (keyword/regex, a *subset* of phrasings) is a typed fallback for when the key is absent or a call fails. Which path produced a plan is recorded on `interpretation_source`, so a fallback is never silent. The lift is measured, not asserted: on the 33-case gold set the LLM raises intent accuracy from 52% → 100% and clarification precision from 18% → 100% (see [Evaluation](#evaluation)).
 
 **2. Confidence Routing.** The `ConfidenceRouter` looks up the threshold for `status_check` intent: auto-execute at `0.75`, flag at `0.45`. Since `0.75 >= 0.75`, the decision is `EXECUTE` -- proceed without confirmation.
 
@@ -247,7 +247,7 @@ Not all intents carry equal risk. A `status_check` auto-executes at confidence `
 | `action_request` | 0.90 | 0.60 |
 | `report` | 0.75 | 0.45 |
 
-> **On calibration:** the rule fallback emits a fixed heuristic confidence (`0.75` for any matched pattern), so routing under it is effectively deterministic per intent. The Claude interpreter is better: confidence is *derived deterministically from named signals* the model emits — `single_clear_intent`, `entity_unambiguous`, `all_filter_fields_known`, `time_reference_resolved` — so it is explainable rather than a magic number. The [Evaluation](#evaluation) harness then reports confidence against empirical accuracy, so the claim is measured. (That table surfaced a real finding — see Evaluation — that the larger model is better calibrated at the top of its range but less accurate overall.)
+> **On calibration:** the rule fallback emits a fixed heuristic confidence (`0.75` for any matched pattern), so routing under it is effectively deterministic per intent. The Claude interpreter is better: confidence is *derived deterministically from named signals* the model emits — `single_clear_intent`, `entity_unambiguous`, `all_filter_fields_known`, `time_reference_resolved` — so it is explainable rather than a magic number. The [Evaluation](#evaluation) harness then reports confidence against empirical accuracy, so the claim is measured. (That table surfaced a real finding — see Evaluation — that the smaller, cheaper model is *more* accurate here, and the larger model's main weakness is over-clarification rather than miscalibration.)
 
 ---
 
@@ -300,16 +300,16 @@ LLM_MODEL=claude-sonnet-4-6 make eval EVAL_ARGS="--arm llm" # Sonnet comparison
 
 | Metric | Rule | Haiku 4.5 | Sonnet 4.6 |
 |--------|------|-----------|-----------|
-| Intent accuracy | 52% | **97%** | 76% |
-| Target-system match (exact) | 52% | **85%** | 73% |
-| Filter extraction | 25% | **50%** | 42% |
-| Clarification precision | 18% | **75%** | 30% |
+| Intent accuracy | 52% | **100%** | 88% |
+| Target-system match (exact) | 52% | **97%** | 85% |
+| Filter extraction | 25% | **58%** | 58% |
+| Clarification precision | 18% | **100%** | 50% |
 | Clarification recall | 100% | 100% | 100% |
 | Cost / 33-case run | — | ~$0.07 | ~$0.25 |
 
 The rule baseline is deliberately unflattering: it drops filters it has no pattern for, misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies** (100% recall, 18% precision — it asks for clarification on most queries it can't pattern-match). Its confidence collapses to two constants (`0.2` / `0.75`), so its reliability table has two rows. The Claude interpreter closes that gap: forced tool-use returns schema-valid plans by construction, and confidence derived from emitted signals gives a reliability table that spans real bands.
 
-**A finding worth stating plainly: the cheaper, faster model won.** Haiku 4.5 outscores Sonnet 4.6 on every accuracy metric here, at ~⅓ the cost. Sonnet's failure mode is *over-clarification* — it declines ~7 queries it could have answered (30% clarification precision), a cautious-but-less-useful behavior — whereas Haiku commits. Sonnet is better calibrated at the very top of its confidence range (0.9–1.0 → 100% accurate), but that conservatism costs it overall accuracy. For a structured-classification task against known systems, the smaller model is the right production default — which is why it is the default in `config/settings.py`. *(Caveat: N=33, one run per arm at `temperature=0`; the gold set is being expanded before treating the gap as definitive. The residual Haiku misses are mostly an "exceptions live in OMS" domain fact not yet stated in the prompt.)*
+**A finding worth stating plainly: the cheaper, faster model won.** Haiku 4.5 matches or beats Sonnet 4.6 on every metric here — it ties on filter extraction (58%) and wins everywhere else, including intent (100% vs 88%) and target-system selection (97% vs 85%) — at ~⅓ the cost. Sonnet's main weakness is *over-clarification*: at 50% clarification precision, half the queries it flags as too-ambiguous-to-answer were actually answerable, whereas Haiku declines only the genuinely ambiguous ones (100% precision) without missing any (100% recall). Both models put most cases in their top confidence band and are mostly right there (Haiku 30 cases → 97%, Sonnet 27 → 93%), so the gap is accuracy, not calibration. For a structured-classification task against known systems, the smaller model is the right production default — which is why it is the default in `config/settings.py`. *(Caveat: N=33, one run per arm at `temperature=0`; the gold set is being expanded before treating this as definitive — 100% intent on 33 cases shows the rule→LLM gap is real here, not that the interpreter is infallible.)*
 
 ---
 
