@@ -89,6 +89,23 @@ async def run_scenario(
     console.print(f"\n[dim]{explanation}[/dim]")
 
 
+async def run_turn(copilot: Copilot, query: str, explanation: str) -> None:
+    """Run one turn of an ongoing conversation and show how it was interpreted."""
+    console.print(f"\n[dim]You:[/dim] [yellow]{query}[/yellow]")
+    result = await copilot.process_query(query)
+    plan = result.get("plan")
+    if plan is not None:
+        systems = ", ".join(s.value for s in plan.target_systems) or "none"
+        filters = ", ".join(f"{f.field}={f.value}" for f in plan.filters) or "no filters"
+        console.print(
+            f"[dim]Interpreted:[/dim] {plan.intent.value} on [{systems}] "
+            f"({filters}) [dim]via {plan.interpretation_source}[/dim]"
+        )
+    if result.get("status") == "clarify":
+        console.print(f"[yellow]{result.get('message', '')}[/yellow]")
+    console.print(f"[dim]{explanation}[/dim]")
+
+
 async def main() -> None:
     """Run the full demo walkthrough."""
     console.print(
@@ -153,16 +170,39 @@ async def main() -> None:
             "based on its supported capabilities.",
         )
 
+        # Scenario 6: Multi-turn context / referent memory
+        console.print(f"\n{'=' * 60}")
+        console.print("[bold cyan]Scenario 6: Multi-Turn Context (referent memory)[/bold cyan]")
+        console.print(f"{'=' * 60}")
+        await run_turn(
+            copilot,
+            "show pending orders",
+            "First turn sets the context: pending orders in OMS. The copilot "
+            "remembers this interpretation for the next turn.",
+        )
+        await run_turn(
+            copilot,
+            "just the enterprise-tier ones",
+            "The follow-up names no system or status. With the Claude interpreter "
+            "(key set) it carries forward the prior plan — oms, status=pending — and "
+            "adds customer_tier=enterprise. Offline on the rule fallback there is no "
+            "pattern for this phrasing, so it asks for clarification: exactly the gap "
+            "the live enum injection + referent memory close.",
+        )
+
     console.print(
         Panel(
             "[bold green]Demo complete![/bold green]\n\n"
             "The copilot demonstrated:\n"
-            "  1. Rule-based query understanding (keyword/regex)\n"
+            "  1. Query understanding (keyword/regex fallback, shown here)\n"
             "  2. Cross-system data joining\n"
-            "  3. Contextual clarification suggestions\n\n"
-            "These ran offline on the rule-based interpreter. A Claude interpreter "
-            "(being hardened to tool-use) is attempted when ANTHROPIC_API_KEY is set "
-            "— see evals/ for the measured rule-vs-LLM accuracy gap.",
+            "  3. Contextual clarification suggestions\n"
+            "  4. Multi-turn context / referent memory\n\n"
+            "Without a key these run on the rule-based fallback. With "
+            "ANTHROPIC_API_KEY set, the Claude tool-use interpreter takes over — "
+            "with live enum values and referent memory injected into its context — "
+            "and the follow-up turn above resolves instead of asking to clarify. "
+            "See evals/ for the measured rule-vs-LLM accuracy gap.",
             title="Summary",
             border_style="green",
         )

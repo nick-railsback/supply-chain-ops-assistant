@@ -24,10 +24,56 @@ import re
 from agent.llm import LLMUnavailable, structured_call
 from agent.validators import validate_query_plan
 from config.prompts import INTERPRET_QUERY_SYSTEM, INTERPRET_QUERY_USER
+from models.oms import ExceptionStatus, ExceptionType, OrderChannel, OrderStatus
 from models.query import ConfidenceSignals, DataFilter, QueryPlan
-from models.shared import TargetSystem, UserIntent
+from models.shared import Severity, TargetSystem, UserIntent
+from models.tms import ShipmentStatus, SLAStatus
+from seed.constants import CARRIERS, CUSTOMER_TIERS, FULFILLMENT_CENTERS, PRODUCT_CATALOG
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Live enum injection (context engineering)
+# ---------------------------------------------------------------------------
+
+
+def _field_value_reference() -> str:
+    """Assemble the allowed-value domains for enum / fixed-domain fields from the
+    canonical models and seed constants, so the interpreter sees the real values
+    it may emit — not just field names.
+
+    Built once at import (see ``INTERPRET_SYSTEM_PROMPT``); the string is stable,
+    so the system-prompt block still hits the prompt cache.
+    """
+    categories = sorted({str(p["category"]) for p in PRODUCT_CATALOG})
+    centers = [str(c["id"]) for c in FULFILLMENT_CENTERS]
+    carriers = [str(c["name"]) for c in CARRIERS]
+
+    def line(label: str, values: list[str]) -> str:
+        return f"  {label}: " + ", ".join(values)
+
+    return "\n".join(
+        [
+            "# Allowed values for enum / fixed-domain fields",
+            "# (emit a filter value only from the matching list)",
+            line("oms order.status", [s.value for s in OrderStatus]),
+            line("oms order.channel", [s.value for s in OrderChannel]),
+            line("oms order.customer_tier", list(CUSTOMER_TIERS)),
+            line("oms exception.exception_type", [s.value for s in ExceptionType]),
+            line("oms exception.severity", [s.value for s in Severity]),
+            line("oms exception.status", [s.value for s in ExceptionStatus]),
+            line("wms inventory.category", categories),
+            line("wms inventory.fulfillment_center", centers),
+            line("tms shipment.carrier", carriers),
+            line("tms shipment.shipment_status", [s.value for s in ShipmentStatus]),
+            line("tms shipment.sla_status", [s.value for s in SLAStatus]),
+        ]
+    )
+
+
+# The interpreter system prompt = static domain knowledge + live value domains.
+INTERPRET_SYSTEM_PROMPT = INTERPRET_QUERY_SYSTEM + "\n" + _field_value_reference()
 
 # ---------------------------------------------------------------------------
 # Prompt builder
@@ -54,7 +100,7 @@ def _build_prompt(
     else:
         context_str = "  (no prior conversation)"
 
-    system_prompt = INTERPRET_QUERY_SYSTEM
+    system_prompt = INTERPRET_SYSTEM_PROMPT
     user_prompt = INTERPRET_QUERY_USER.format(
         user_query=user_query,
         conversation_context=context_str,
@@ -277,9 +323,9 @@ def _plan_from_tool_input(data: dict, source: str) -> QueryPlan:
     )
 
 
-async def _call_interpreter(user_prompt: str) -> dict:
+async def _call_interpreter(system_prompt: str, user_prompt: str) -> dict:
     data, usage = await structured_call(
-        system=INTERPRET_QUERY_SYSTEM,
+        system=system_prompt,
         user=user_prompt,
         tool_name=INTERPRET_TOOL_NAME,
         tool_description=INTERPRET_TOOL_DESCRIPTION,
@@ -295,9 +341,11 @@ async def llm_interpret(
     conversation_context: list[dict[str, str]],
 ) -> QueryPlan:
     """Tool-use interpretation with ONE repair retry on validation failure."""
-    _system, user_prompt = _build_prompt(user_query, conversation_context)
+    system_prompt, user_prompt = _build_prompt(user_query, conversation_context)
 
-    plan = _plan_from_tool_input(await _call_interpreter(user_prompt), source="llm")
+    plan = _plan_from_tool_input(
+        await _call_interpreter(system_prompt, user_prompt), source="llm"
+    )
     errors = await validate_query_plan(plan)
     if not errors:
         return plan
@@ -308,7 +356,9 @@ async def llm_interpret(
         + "\n".join(f"- {e}" for e in errors)
         + "\n\nReturn a corrected plan."
     )
-    plan = _plan_from_tool_input(await _call_interpreter(repair_prompt), source="llm_repaired")
+    plan = _plan_from_tool_input(
+        await _call_interpreter(system_prompt, repair_prompt), source="llm_repaired"
+    )
     errors = await validate_query_plan(plan)
     if errors:
         raise ValueError(f"LLM plan failed validation after repair: {errors}")
@@ -318,6 +368,18 @@ async def llm_interpret(
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def _summarize_plan(plan: QueryPlan) -> str:
+    """One-line summary of an interpretation, stored as conversation context so a
+    later turn can resolve references ("those", "the same ones") back to it.
+    """
+    systems = ", ".join(s.value for s in plan.target_systems) or "none"
+    if plan.filters:
+        flt = "; ".join(f"{f.field} {f.operator} {f.value}" for f in plan.filters)
+    else:
+        flt = "no filters"
+    return f"interpreted as {plan.intent.value} on [{systems}] ({flt})"
 
 
 def _suggest_alternatives(user_query: str) -> list[str]:

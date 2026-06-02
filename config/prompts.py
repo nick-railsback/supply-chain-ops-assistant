@@ -10,6 +10,7 @@ queries into a structured query plan by calling the `emit_query_plan` tool.
 
 # Target systems
   orders     → oms (Order Management System)
+  exceptions → oms (order exceptions also live in the OMS)
   inventory  → wms (Warehouse Management System)
   shipments  → tms (Transportation Management System)
 
@@ -26,6 +27,8 @@ queries into a structured query plan by calling the `emit_query_plan` tool.
   oms (orders):
     status, channel, customer_tier, order_date, date_range_start,
     date_range_end, order_value, priority
+  oms (exceptions):
+    exception_type, severity, status, date_from, date_to
   wms (inventory):
     sku, category, fulfillment_center, quantity_available, low_stock_flag,
     reorder_point, below_reorder_point
@@ -42,6 +45,13 @@ queries into a structured query plan by calling the `emit_query_plan` tool.
                              week") was left unresolved.
   Set model_confidence to your own honest 0–1 estimate. When the query is too
   vague to map confidently, prefer intent=clarification_needed over guessing.
+
+# Resolving references to earlier turns
+  The conversation context may include a one-line summary of how the previous
+  query was interpreted ("interpreted as ..."). If the new query refers back to
+  it ("those", "them", "the same ones", "just the ... ones"), carry forward the
+  previous target_systems and filters, then apply whatever the user adds or
+  narrows. Only drop a prior filter when the user clearly replaces it.
 """
 
 # --- Query Interpreter: user prompt template ---

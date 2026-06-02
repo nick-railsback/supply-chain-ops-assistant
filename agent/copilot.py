@@ -13,7 +13,7 @@ import logging
 from typing import Any
 
 from agent.confidence import ConfidenceRouter, RoutingDecision
-from agent.query_interpreter import _suggest_alternatives, interpret_query
+from agent.query_interpreter import _suggest_alternatives, _summarize_plan, interpret_query
 from agent.validators import validate_query_plan
 from config.prompts import (
     CLARIFICATION_RESPONSE,
@@ -144,7 +144,9 @@ class Copilot:
             message = f"Query executed successfully. {result.total_count} result(s) returned."
             status = "success"
 
-        self._update_history("assistant", message)
+        # Record the interpretation (not the user-facing message) so the next
+        # turn can resolve references like "those" / "the same ones".
+        self._update_history("assistant", _summarize_plan(plan))
         return {
             "status": status,
             "plan": plan,
