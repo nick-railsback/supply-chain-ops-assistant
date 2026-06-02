@@ -116,19 +116,22 @@ def _build_prompt(
 # Pattern tuples: (compiled regex, intent, target_systems, primary_entity, extra_filters)
 _PATTERNS: list[tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list[DataFilter]]] = [
     # --- Orders ---
-    (
-        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
-        UserIntent.STATUS_CHECK,
-        [TargetSystem.OMS],
-        "order",
-        [],
-    ),
+    # Specific order patterns must precede the generic "show ... orders" pattern:
+    # _rule_based_interpret is first-match-wins, so a generic match would shadow
+    # the filtered ones and silently drop the at_risk filter.
     (
         re.compile(r"\bat[- ]?risk\b.*\borders?\b|\borders?\b.*\bat[- ]?risk\b", re.IGNORECASE),
         UserIntent.STATUS_CHECK,
         [TargetSystem.OMS],
         "order",
         [DataFilter(field="at_risk", operator="eq", value=True)],
+    ),
+    (
+        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "order",
+        [],
     ),
     (
         re.compile(r"\bpending\b.*\borders?\b|\borders?\b.*\bpending\b", re.IGNORECASE),
