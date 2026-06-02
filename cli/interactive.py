@@ -14,6 +14,7 @@ from rich.text import Text
 
 from agent.copilot import Copilot
 from models.action import ActionProposal
+from models.query import ConfidenceSignals, QueryPlan
 from models.report import ReportOutput
 from models.shared import RiskLevel
 from services.client import OpsClient
@@ -373,6 +374,88 @@ def render_report(report: ReportOutput) -> Panel:
 
 
 # ===================================================================
+# Reasoning panel  (C1 — surface the interpret/route/validate pipeline)
+# ===================================================================
+
+# Color per interpretation source so the LLM-vs-fallback choice is visible live.
+_SOURCE_COLORS: dict[str, str] = {
+    "llm": "green",
+    "llm_repaired": "cyan",
+    "rule_based": "yellow",
+    "fallback": "red",
+}
+
+
+def _signal_items(signals: ConfidenceSignals) -> list[tuple[str, bool]]:
+    """Flatten ConfidenceSignals into (label, value) pairs for display."""
+    return [
+        ("all filter fields known", signals.all_filter_fields_known),
+        ("entity unambiguous", signals.entity_unambiguous),
+        ("single clear intent", signals.single_clear_intent),
+        ("time reference resolved", signals.time_reference_resolved),
+    ]
+
+
+def render_reasoning_panel(plan: QueryPlan, routing: str, errors: list[str]) -> Panel:
+    """Render the interpret -> route -> validate pipeline for a single turn.
+
+    Surfaces the work ``copilot.process_query`` does but the result view drops:
+    the intent, how it was interpreted (LLM vs rule fallback), the confidence
+    and the signals behind it, the routing decision, and the validation outcome.
+    """
+    source = plan.interpretation_source
+    source_color = _SOURCE_COLORS.get(source, "white")
+
+    conf_color = (
+        "green"
+        if plan.confidence >= 0.75
+        else "yellow"
+        if plan.confidence >= 0.45
+        else "red"
+    )
+
+    rows: list[Any] = [
+        Text.assemble(("Intent:      ", "bold"), plan.intent.value),
+        Text.assemble(("Source:      ", "bold"), (source, f"bold {source_color}")),
+        Text.assemble(("Confidence:  ", "bold"), (f"{plan.confidence:.0%}", conf_color)),
+    ]
+    if plan.model_confidence is not None:
+        rows.append(
+            Text.assemble(
+                ("Self-report: ", "bold"),
+                (f"{plan.model_confidence:.0%}", "dim"),
+            )
+        )
+
+    if plan.confidence_signals is not None:
+        rows.append(Text("Signals:", style="bold"))
+        for label, value in _signal_items(plan.confidence_signals):
+            mark = "✓" if value else "✗"
+            mark_color = "green" if value else "red"
+            rows.append(Text.assemble("  ", (f"{mark} ", mark_color), label))
+
+    systems = ", ".join(s.value for s in plan.target_systems) or "(none)"
+    rows.append(Text.assemble(("Systems:     ", "bold"), systems))
+    rows.append(Text.assemble(("Routing:     ", "bold"), routing or "(n/a)"))
+
+    if errors:
+        rows.append(Text.assemble(("Validation:  ", "bold"), ("failed", "red")))
+        rows.extend(Text(f"  - {err}", style="red") for err in errors)
+    else:
+        rows.append(Text.assemble(("Validation:  ", "bold"), ("passed", "green")))
+
+    rows.append(Text(""))
+    rows.append(Text(f"Reasoning: {plan.reasoning}", style="dim italic"))
+
+    return Panel(
+        Group(*rows),
+        title="[bold]Reasoning[/bold]",
+        border_style=source_color,
+        expand=True,
+    )
+
+
+# ===================================================================
 # Action confirmation UI  (Story 9.4)
 # ===================================================================
 
@@ -451,10 +534,11 @@ _HELP_TEXT = """\
   "Show low stock inventory items"
 
 [bold]Commands[/bold]
-  /help     Show this help message
-  /status   Re-check API health status
-  /history  Show recent queries from this session
-  /exit     Exit the assistant
+  /help       Show this help message
+  /status     Re-check API health status
+  /history    Show recent queries from this session
+  /reasoning  Toggle the per-turn reasoning panel
+  /exit       Exit the assistant
 """
 
 
@@ -465,6 +549,7 @@ class InteractiveCLI:
         self.console = Console()
         self.copilot: Copilot | None = None
         self.history: list[str] = []
+        self.show_reasoning: bool = True
 
     async def _check_health(self) -> dict[str, bool]:
         """Ping each API /health endpoint and return a service-name -> healthy mapping."""
@@ -560,6 +645,11 @@ class InteractiveCLI:
                 for i, q in enumerate(recent, 1):
                     self.console.print(f"  {i}. {q}")
 
+        elif command == "/reasoning":
+            self.show_reasoning = not self.show_reasoning
+            state = "on" if self.show_reasoning else "off"
+            self.console.print(f"[dim]Reasoning panel {state}.[/dim]")
+
         elif command == "/exit":
             self.console.print("Goodbye!")
             raise SystemExit(0)
@@ -586,6 +676,15 @@ class InteractiveCLI:
 
         status = result.get("status", "error")
         message = result.get("message", "")
+
+        # Surface the interpret -> route -> validate pipeline for the turn.
+        plan = result.get("plan")
+        if plan is not None and self.show_reasoning:
+            self.console.print(
+                render_reasoning_panel(
+                    plan, result.get("routing", ""), result.get("errors", [])
+                )
+            )
 
         if status == "clarify":
             self.console.print(f"[yellow]{message}[/yellow]")
