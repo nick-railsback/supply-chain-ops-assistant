@@ -1,6 +1,6 @@
 # Supply Chain Ops Assistant
 
-> A supply-chain operations copilot — ask about orders, inventory, and shipments across OMS, WMS, and TMS in natural language. Interpretation runs on a deterministic rule-based layer today; a Claude tool-use interpreter is being layered in and measured against a labeled eval set (see [Evaluation](#evaluation)).
+> A supply-chain operations copilot — ask about orders, inventory, and shipments across OMS, WMS, and TMS in natural language. A Claude **tool-use** interpreter (Haiku 4.5) turns free-form queries into a validated, typed query plan, with a deterministic rule-based interpreter as a typed fallback. Interpreter quality is measured against a labeled eval set — the LLM lifts intent accuracy from 52% to 97% (see [Evaluation](#evaluation)).
 
 ---
 
@@ -185,7 +185,7 @@ ops-copilot > Show me all pending orders
 
 Here is what happens when you ask `what orders are pending`:
 
-**1. Interpretation.** The rule-based `QueryInterpreter` matches the input against keyword/regex patterns, detecting the intent (`STATUS_CHECK`), the target system (`OMS`), the primary entity (`order`), and a `status = pending` filter. These are packed into a `QueryPlan` Pydantic model:
+**1. Interpretation.** The `QueryInterpreter` calls Claude with a single forced tool (`emit_query_plan`), so the interpretation comes back as schema-valid arguments — there is no free-text JSON to parse. The model classifies the intent (`STATUS_CHECK`), target system (`OMS`), primary entity (`order`), and a `status = pending` filter, and emits the confidence *signals* behind its read. If the LLM is unavailable, a deterministic rule-based interpreter produces the same shape; either way the path is recorded on `interpretation_source`. The result is a `QueryPlan` Pydantic model:
 
 ```python
 QueryPlan(
@@ -193,12 +193,17 @@ QueryPlan(
     target_systems=[TargetSystem.OMS],
     primary_entity="order",
     filters=[DataFilter(field="status", operator="eq", value="pending")],
-    confidence=0.75,  # fixed heuristic in rule mode; a per-query signal under the LLM interpreter
-    reasoning="Rule-based match for 'order' query",
+    confidence=0.99,  # derived from emitted signals, not a constant
+    reasoning="User is asking for orders in pending status.",
+    interpretation_source="llm",
+    confidence_signals=ConfidenceSignals(
+        single_clear_intent=True, entity_unambiguous=True,
+        all_filter_fields_known=True, time_reference_resolved=True,
+    ),
 )
 ```
 
-> **What's rule-based vs LLM today.** The rule layer is keyword-driven and recognizes a *subset* of phrasings. It matches `what orders are pending`, but a generic `show me … orders` phrasing currently resolves to an *unfiltered* order lookup (the generic pattern matches first), and free-form queries fall through to a clarification prompt. Lifting that ceiling — free-form phrasing, robust filter extraction, and a calibrated confidence signal — is exactly what the Claude tool-use interpreter adds. The [`evals/`](evals/) harness measures both paths against gold labels so the gap is quantified, not asserted.
+> **LLM interpreter, rule fallback.** When an `ANTHROPIC_API_KEY` is set, Claude tool-use is the default interpreter; the rule layer (keyword/regex, a *subset* of phrasings) is a typed fallback for when the key is absent or a call fails. Which path produced a plan is recorded on `interpretation_source`, so a fallback is never silent. The lift is measured, not asserted: on the 33-case gold set the LLM raises intent accuracy from 52% → 97% and clarification precision from 18% → 75% (see [Evaluation](#evaluation)).
 
 **2. Confidence Routing.** The `ConfidenceRouter` looks up the threshold for `status_check` intent: auto-execute at `0.75`, flag at `0.45`. Since `0.75 >= 0.75`, the decision is `EXECUTE` -- proceed without confirmation.
 
@@ -240,7 +245,7 @@ Not all intents carry equal risk. A `status_check` auto-executes at confidence `
 | `action_request` | 0.90 | 0.60 |
 | `report` | 0.75 | 0.45 |
 
-> **On calibration:** in rule-based mode the *input* confidence is a fixed heuristic (`0.75` for any matched pattern), so routing is effectively deterministic per intent. The threshold design above is real; the signal feeding it is not yet. The Claude interpreter emits a per-query confidence along with the discrete signals behind it (are all filter fields known? is the entity unambiguous?), and the [Evaluation](#evaluation) harness reports confidence against empirical accuracy so the claim is measured rather than asserted.
+> **On calibration:** the rule fallback emits a fixed heuristic confidence (`0.75` for any matched pattern), so routing under it is effectively deterministic per intent. The Claude interpreter is better: confidence is *derived deterministically from named signals* the model emits — `single_clear_intent`, `entity_unambiguous`, `all_filter_fields_known`, `time_reference_resolved` — so it is explainable rather than a magic number. The [Evaluation](#evaluation) harness then reports confidence against empirical accuracy, so the claim is measured. (That table surfaced a real finding — see Evaluation — that the larger model is better calibrated at the top of its range but less accurate overall.)
 
 ---
 
@@ -265,23 +270,28 @@ The test suite includes 10 scenario files in `tests/scenarios/`, each defining a
 
 ## Evaluation
 
-Interpreter quality is **measured, not asserted.** The harness in [`evals/`](evals/) scores natural-language → `QueryPlan` accuracy against gold labels in `evals/dataset.jsonl` (33 cases and growing) across two arms: the deterministic **rule-based** interpreter and the **Claude** interpreter.
+Interpreter quality is **measured, not asserted.** The harness in [`evals/`](evals/) scores natural-language → `QueryPlan` accuracy against gold labels in `evals/dataset.jsonl` (33 cases and growing) across three arms: the deterministic **rule-based** fallback, and the **Claude tool-use** interpreter on **Haiku 4.5** (default) and **Sonnet 4.6**.
 
 ```bash
-make eval                          # rule arm (offline, no API key)
-make eval EVAL_ARGS="--arm both"   # comparative rule-vs-LLM lift table
+make eval                                                   # rule arm (offline, no API key)
+make eval EVAL_ARGS="--arm both"                            # rule vs LLM (Haiku) lift table
+LLM_MODEL=claude-sonnet-4-6 make eval EVAL_ARGS="--arm llm" # Sonnet comparison
 ```
 
-**Current rule-based baseline (33 cases):**
+**Measured lift (33 cases, `temperature=0`):**
 
-| Metric | Rule-based |
-|--------|-----------|
-| Intent accuracy | 52% (17/33) |
-| Target-system match | 52% (17/33) |
-| Filter extraction | 25% (3/12 pairs) |
-| Clarification precision / recall | 18% / 100% |
+| Metric | Rule | Haiku 4.5 | Sonnet 4.6 |
+|--------|------|-----------|-----------|
+| Intent accuracy | 52% | **97%** | 76% |
+| Target-system match (exact) | 52% | **85%** | 73% |
+| Filter extraction | 25% | **50%** | 42% |
+| Clarification precision | 18% | **75%** | 30% |
+| Clarification recall | 100% | 100% | 100% |
+| Cost / 33-case run | — | ~$0.07 | ~$0.25 |
 
-These numbers are deliberately unflattering — they quantify exactly where a keyword/regex interpreter falls short. It drops filters it has no pattern for (`show me all pending orders` → *all* orders), misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies**: 100% clarification recall but 18% precision means it asks for clarification on most queries it can't pattern-match rather than answering them. The confidence "signal" collapses to two constants (`0.2` / `0.75`), so the reliability table has two rows — which is itself the finding. Closing this gap with a Claude tool-use interpreter, and reporting the lift here, is the active work (see [Evaluation harness](evals/)).
+The rule baseline is deliberately unflattering: it drops filters it has no pattern for, misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies** (100% recall, 18% precision — it asks for clarification on most queries it can't pattern-match). Its confidence collapses to two constants (`0.2` / `0.75`), so its reliability table has two rows. The Claude interpreter closes that gap: forced tool-use returns schema-valid plans by construction, and confidence derived from emitted signals gives a reliability table that spans real bands.
+
+**A finding worth stating plainly: the cheaper, faster model won.** Haiku 4.5 outscores Sonnet 4.6 on every accuracy metric here, at ~⅓ the cost. Sonnet's failure mode is *over-clarification* — it declines ~7 queries it could have answered (30% clarification precision), a cautious-but-less-useful behavior — whereas Haiku commits. Sonnet is better calibrated at the very top of its confidence range (0.9–1.0 → 100% accurate), but that conservatism costs it overall accuracy. For a structured-classification task against known systems, the smaller model is the right production default — which is why it is the default in `config/settings.py`. *(Caveat: N=33, one run per arm at `temperature=0`; the gold set is being expanded before treating the gap as definitive. The residual Haiku misses are mostly an "exceptions live in OMS" domain fact not yet stated in the prompt.)*
 
 ---
 
@@ -292,7 +302,8 @@ supply-chain-ops-assistant/
 |
 |-- agent/                        # Copilot agent layer
 |   |-- copilot.py                # Main orchestrator: interpret -> route -> validate -> execute
-|   |-- query_interpreter.py      # NL to QueryPlan (rule-based fallback, LLM-ready)
+|   |-- llm.py                    # Shared Claude tool-use client (forced tool_choice, caching)
+|   |-- query_interpreter.py      # NL to QueryPlan (Claude tool-use, rule-based fallback)
 |   |-- confidence.py             # Per-intent confidence routing with three outcomes
 |   |-- action_handler.py         # Action proposal generation for mutations
 |   |-- report_generator.py       # Structured report generation
@@ -355,7 +366,7 @@ supply-chain-ops-assistant/
 |-------|-----------|-----------|
 | Language | Python 3.11+ | Async-first, strong typing with `|` union syntax, ecosystem depth |
 | Agent Orchestration | Custom Copilot class | Explicit pipeline stages, no framework lock-in, full auditability |
-| LLM Integration | Anthropic Claude (rule-based default) | Rule-based interpreter is the working default; a Claude interpreter is attempted when `ANTHROPIC_API_KEY` is set and is being hardened to tool-use structured output. See [Evaluation](#evaluation). |
+| LLM Integration | Anthropic Claude (tool-use) | Claude is the default interpreter — forced `tool_choice` for schema-valid plans, prompt caching, `temperature=0` — on Haiku 4.5; the rule-based interpreter is a typed fallback. See [Evaluation](#evaluation). |
 | Data Validation | Pydantic v2 | Runtime type enforcement at every boundary, JSON schema generation |
 | Configuration | pydantic-settings | Typed env vars with `.env` file support and validation |
 | API Framework | FastAPI | Async-native, automatic OpenAPI docs, Pydantic integration |

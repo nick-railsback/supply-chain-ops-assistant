@@ -5,6 +5,7 @@ description = "AI operations copilot for supply chain teams — natural language
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "anthropic>=0.40",
     "fastapi",
     "uvicorn[standard]",
     "pydantic>=2.11",

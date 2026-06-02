@@ -148,7 +148,11 @@ async def propose_action(
                 messages=[{"role": "user", "content": prompt}],
                 max_tokens=1024,
             )
-            proposal = ActionProposal.model_validate_json(message.content[0].text)
+            raw = next(
+                (b.text for b in message.content if isinstance(b, anthropic.types.TextBlock)),
+                "",
+            )
+            proposal = ActionProposal.model_validate_json(raw)
             errors = await validate_action_proposal(proposal)
             if errors:
                 raise ValueError(f"Action validation failed: {'; '.join(errors)}")

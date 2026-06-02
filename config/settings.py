@@ -38,7 +38,10 @@ class Settings(BaseSettings):
     tms_api_url: str = "http://localhost:8003"
 
     # LLM
-    llm_model: str = "claude-sonnet-4-20250514"
+    # Haiku 4.5 is the dev/default: fast and cheap for a structured classifier,
+    # and a defensible production choice. The headline eval run uses Sonnet 4.6
+    # (`make eval EVAL_ARGS="--arm both"` with LLM_MODEL=claude-sonnet-4-6).
+    llm_model: str = "claude-haiku-4-5-20251001"
 
     # HTTP Client
     http_connect_timeout: float = 3.0

@@ -22,9 +22,10 @@ Usage:
     python -m evals.run_eval --arm both       # comparative lift table
     python -m evals.run_eval --verbose        # per-case pass/fail detail
 
-Note: the ``llm`` arm currently calls ``interpret_query``, which falls back to
-the rule path on any LLM error — so a degraded LLM is scored as its fallback.
-Once ``interpretation_source`` lands (Tier B), the harness can separate them.
+The ``llm`` arm calls ``interpret_query``, which falls back to the rule path on
+any LLM error. To keep that honest, every arm reports its ``interpretation_source``
+mix (``llm`` / ``llm_repaired`` / ``rule_based`` / ``fallback``) so a degraded
+LLM scored as its fallback is visible rather than hidden.
 """
 
 from __future__ import annotations
@@ -101,6 +102,8 @@ class Tally:
     clar_fn: int = 0
     # confidence reliability: band -> [count, correct]
     bands: dict[str, list[int]] = field(default_factory=dict)
+    # interpretation_source -> count (llm / llm_repaired / rule_based / fallback)
+    sources: dict[str, int] = field(default_factory=dict)
     failures: list[str] = field(default_factory=list)
 
 
@@ -151,6 +154,7 @@ def score(plan: QueryPlan, case: dict) -> tuple[Tally, bool]:
 
     case_correct = intent_ok and systems_ok
     t.bands[_band(plan.confidence)] = [1, int(case_correct)]
+    t.sources[plan.interpretation_source] = 1
 
     if not case_correct:
         t.failures.append(
@@ -179,6 +183,8 @@ def aggregate(rows: list[Tally]) -> Tally:
             cur = agg.bands.setdefault(band, [0, 0])
             cur[0] += cnt
             cur[1] += corr
+        for src, cnt in r.sources.items():
+            agg.sources[src] = agg.sources.get(src, 0) + cnt
     return agg
 
 
@@ -207,7 +213,7 @@ def _pct(x: float) -> str:
     return "n/a" if x != x else f"{x:.0%}"  # x != x → NaN
 
 
-def run_arm(name: str, interp, dataset: list[dict]) -> Tally:
+def run_arm(interp, dataset: list[dict]) -> Tally:
     rows = [score(interp(c["query"]), c)[0] for c in dataset]
     return aggregate(rows)
 
@@ -284,8 +290,11 @@ def write_report(arms: dict[str, Tally]) -> None:
             f"({_pct(m['filter_recall'])}) over {a.filter_cases} cases",
             f"- Clarification precision / recall: "
             f"{_pct(m['clar_precision'])} / {_pct(m['clar_recall'])}",
-            "",
         ]
+        if a.sources:
+            mix = ", ".join(f"`{src}`={cnt}" for src, cnt in sorted(a.sources.items()))
+            lines.append(f"- Interpretation source mix: {mix}")
+        lines.append("")
     REPORT.write_text("\n".join(lines))
 
 
@@ -311,9 +320,9 @@ def main() -> None:
                     "hardened to tool-use.)"
                 )
                 continue
-            arms[name] = run_arm(name, llm_interpret, dataset)
+            arms[name] = run_arm(llm_interpret, dataset)
         else:
-            arms[name] = run_arm(name, rule_interpret, dataset)
+            arms[name] = run_arm(rule_interpret, dataset)
 
     if not arms:
         console.print("[red]No arms ran.[/red]")
@@ -323,6 +332,9 @@ def main() -> None:
     for name, a in arms.items():
         console.print(render_single(name, a))
         console.print(render_reliability(name, a))
+        if a.sources:
+            mix = ", ".join(f"{src}={cnt}" for src, cnt in sorted(a.sources.items()))
+            console.print(f"[dim]interpretation source mix → {mix}[/dim]")
         console.print()
 
     if len(arms) > 1:

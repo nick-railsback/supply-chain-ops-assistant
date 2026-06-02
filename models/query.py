@@ -15,6 +15,20 @@ class DataFilter(BaseModel):
     value: Any
 
 
+class ConfidenceSignals(BaseModel):
+    """Named signals the interpreter emits to make confidence explainable.
+
+    Confidence is derived deterministically from these booleans (see
+    ``agent.query_interpreter._confidence_from_signals``) rather than being a
+    magic number, so the eval's reliability table is interpretable.
+    """
+
+    all_filter_fields_known: bool = False
+    entity_unambiguous: bool = False
+    single_clear_intent: bool = False
+    time_reference_resolved: bool = True  # true when no time reference is needed
+
+
 class QueryPlan(BaseModel):
     """Structured query plan produced by the intent classifier."""
 
@@ -29,6 +43,12 @@ class QueryPlan(BaseModel):
     join_key: str | None = None
     confidence: float = Field(ge=0.0, le=1.0)
     reasoning: str
+
+    # How this plan was produced — observable so a fallback is never silent.
+    # One of: "llm" | "llm_repaired" | "rule_based" | "fallback".
+    interpretation_source: str = "rule_based"
+    confidence_signals: ConfidenceSignals | None = None
+    model_confidence: float | None = None  # the model's own self-report, for comparison
 
 
 class QueryResult(BaseModel):
