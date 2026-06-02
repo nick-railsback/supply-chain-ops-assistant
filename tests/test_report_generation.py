@@ -1,9 +1,7 @@
 """Tests for report generation builders (Story 15.7)."""
 
 from datetime import UTC, date, datetime
-from unittest.mock import AsyncMock, patch
-
-import pytest
+from unittest.mock import AsyncMock
 
 from agent.report_generator import (
     ReportBuilder,
@@ -19,7 +17,6 @@ from models.report import ReportOutput
 from models.shared import PaginatedResponse
 from models.tms import CarrierStats, Shipment, SLASummary
 from models.wms import FulfillmentCenter, InventoryItem
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock data

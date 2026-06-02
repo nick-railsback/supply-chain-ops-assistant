@@ -1,7 +1,5 @@
 """Integration tests for WMS and TMS API endpoints (Story 15.3)."""
 
-import pytest
-
 
 # ---------------------------------------------------------------------------
 # WMS Tests

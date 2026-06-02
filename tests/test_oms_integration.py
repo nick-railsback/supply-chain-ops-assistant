@@ -1,7 +1,5 @@
 """Integration tests for OMS API endpoints (Story 15.2)."""
 
-import pytest
-
 
 class TestListOrders:
     async def test_list_orders_no_filter(self, oms_client):

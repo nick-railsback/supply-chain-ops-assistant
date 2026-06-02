@@ -1,10 +1,7 @@
 """Tests for rule-based query interpreter (Story 15.6)."""
 
-import pytest
-
 from agent.query_interpreter import _rule_based_interpret, interpret_query
 from models.shared import TargetSystem, UserIntent
-
 
 # ---------------------------------------------------------------------------
 # _rule_based_interpret tests

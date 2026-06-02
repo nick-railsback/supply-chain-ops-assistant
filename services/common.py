@@ -8,7 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from sqlalchemy import ColumnElement, Select, func, select
+from sqlalchemy import ColumnElement, Select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -49,7 +49,10 @@ def create_app(service_name: str) -> FastAPI:
     app = FastAPI(title=f"{service_name.upper()} API", version="1.0.0")
 
     app.add_middleware(TraceMiddleware)
-    app.add_middleware(ApiKeyMiddleware, api_secret_key=settings.api_secret_key)
+    # Starlette types add_middleware via a ParamSpec that doesn't line up with a
+    # BaseHTTPMiddleware subclass taking an extra keyword arg; this is a known
+    # typing gap, not a runtime issue.
+    app.add_middleware(ApiKeyMiddleware, api_secret_key=settings.api_secret_key)  # type: ignore[arg-type]
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_allowed_origins,

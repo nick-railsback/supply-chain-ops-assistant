@@ -156,13 +156,13 @@ class ReportBuilder:
         content: str,
         data_table: list[dict[str, Any]] | None = None,
         highlight: str | None = None,
-    ) -> "ReportBuilder":
+    ) -> ReportBuilder:
         self._sections.append(
             ReportSection(title=title, content=content, data_table=data_table, highlight=highlight)
         )
         return self
 
-    def add_action_item(self, item: str) -> "ReportBuilder":
+    def add_action_item(self, item: str) -> ReportBuilder:
         self._action_items.append(item)
         return self
 
@@ -192,7 +192,8 @@ def _build_exception_summary_report(data: dict[str, Any]) -> ReportOutput:
 
     builder.add_section(
         "Exception Overview",
-        f"There are {summary.total_open} open exceptions and {summary.total_resolved} resolved exceptions.",
+        f"There are {summary.total_open} open exceptions and "
+        f"{summary.total_resolved} resolved exceptions.",
         data_table=[{"type": k, "count": v} for k, v in summary.by_type.items()],
         highlight=f"{summary.total_open} open exceptions require attention",
     )
@@ -220,14 +221,16 @@ def _build_exception_summary_report(data: dict[str, Any]) -> ReportOutput:
     critical_exceptions = [ex for ex in open_items if ex.severity == "critical"]
     for ex in critical_exceptions[:5]:
         builder.add_action_item(
-            f"Investigate critical exception {ex.exception_id} (order {ex.order_id}, type: {ex.exception_type})"
+            f"Investigate critical exception {ex.exception_id} "
+            f"(order {ex.order_id}, type: {ex.exception_type})"
         )
     if not critical_exceptions:
         builder.add_action_item("No critical exceptions at this time.")
     if daily_stats:
         avg_rate = sum(d.exception_rate for d in daily_stats) / len(daily_stats)
         builder.add_action_item(
-            f"Average exception rate over last {len(daily_stats)} days: {avg_rate:.1%} — monitor for upward trends."
+            f"Average exception rate over last {len(daily_stats)} days: "
+            f"{avg_rate:.1%} — monitor for upward trends."
         )
 
     return builder.build()
@@ -243,7 +246,9 @@ def _build_sla_compliance_report(data: dict[str, Any]) -> ReportOutput:
 
     builder.add_section(
         "SLA Overview",
-        f"Overall SLA compliance rate: {sla.compliance_rate:.1%}. Of {sla.total_shipments} shipments, {sla.met} met SLA, {sla.at_risk} are at risk, and {sla.breached} have breached.",
+        f"Overall SLA compliance rate: {sla.compliance_rate:.1%}. "
+        f"Of {sla.total_shipments} shipments, {sla.met} met SLA, "
+        f"{sla.at_risk} are at risk, and {sla.breached} have breached.",
         data_table=[
             {"metric": "Total Shipments", "value": sla.total_shipments},
             {"metric": "On Track", "value": sla.on_track},
@@ -288,7 +293,8 @@ def _build_sla_compliance_report(data: dict[str, Any]) -> ReportOutput:
     for cs in carrier_perf:
         if cs.on_time_rate < 0.90:
             builder.add_action_item(
-                f"Investigate carrier {cs.carrier} — on-time rate {cs.on_time_rate:.1%} is below 90% threshold."
+                f"Investigate carrier {cs.carrier} — on-time rate "
+                f"{cs.on_time_rate:.1%} is below 90% threshold."
             )
     if sla.breached > 0:
         builder.add_action_item(
@@ -310,7 +316,8 @@ def _build_center_health_report(data: dict[str, Any]) -> ReportOutput:
 
     builder.add_section(
         "Center Utilization",
-        f"{len(centers)} fulfillment centers tracked. {len(high_util)} operating above 90% capacity.",
+        f"{len(centers)} fulfillment centers tracked. "
+        f"{len(high_util)} operating above 90% capacity.",
         data_table=[
             {
                 "center_id": c.center_id,
@@ -343,11 +350,13 @@ def _build_center_health_report(data: dict[str, Any]) -> ReportOutput:
 
     for c in high_util:
         builder.add_action_item(
-            f"Center {c.center_id} ({c.name}) at {c.current_utilization:.1%} utilization — consider load balancing."
+            f"Center {c.center_id} ({c.name}) at {c.current_utilization:.1%} "
+            f"utilization — consider load balancing."
         )
     for item in low_items[:5]:
         builder.add_action_item(
-            f"Reorder {item.sku} at {item.fulfillment_center_id} — {item.quantity_available} available vs {item.reorder_point} reorder point."
+            f"Reorder {item.sku} at {item.fulfillment_center_id} — "
+            f"{item.quantity_available} available vs {item.reorder_point} reorder point."
         )
     if not builder._action_items:
         builder.add_action_item("All centers and inventory levels within normal range.")
@@ -388,16 +397,19 @@ def _build_daily_volume_trend_report(data: dict[str, Any]) -> ReportOutput:
         if previous.total_orders > 0:
             if recent.total_orders > previous.total_orders * 1.2:
                 builder.add_action_item(
-                    f"Order volume spike on {recent.date}: {recent.total_orders} orders (+{((recent.total_orders / previous.total_orders) - 1):.0%} vs prior day)."
+                    f"Order volume spike on {recent.date}: {recent.total_orders} orders "
+                    f"(+{((recent.total_orders / previous.total_orders) - 1):.0%} vs prior day)."
                 )
             if recent.total_orders < previous.total_orders * 0.8:
                 builder.add_action_item(
-                    f"Order volume drop on {recent.date}: {recent.total_orders} orders ({((recent.total_orders / previous.total_orders) - 1):.0%} vs prior day)."
+                    f"Order volume drop on {recent.date}: {recent.total_orders} orders "
+                    f"({((recent.total_orders / previous.total_orders) - 1):.0%} vs prior day)."
                 )
     high_exception_days = [d for d in daily_stats if d.exception_rate > 0.05]
     if high_exception_days:
         builder.add_action_item(
-            f"{len(high_exception_days)} day(s) with exception rate above 5% — investigate operational issues."
+            f"{len(high_exception_days)} day(s) with exception rate above 5% "
+            f"— investigate operational issues."
         )
     if not builder._action_items:
         builder.add_action_item("Volume and revenue trends within normal range.")
@@ -443,18 +455,23 @@ def _build_carrier_performance_report(data: dict[str, Any]) -> ReportOutput:
         worst = min(carrier_stats, key=lambda cs: cs.on_time_rate)
         if best.carrier != worst.carrier:
             builder.add_action_item(
-                f"Best on-time: {best.carrier} ({best.on_time_rate:.1%}). Worst: {worst.carrier} ({worst.on_time_rate:.1%}). Consider shifting volume from {worst.carrier} to {best.carrier}."
+                f"Best on-time: {best.carrier} ({best.on_time_rate:.1%}). "
+                f"Worst: {worst.carrier} ({worst.on_time_rate:.1%}). "
+                f"Consider shifting volume from {worst.carrier} to {best.carrier}."
             )
         cheapest = min(carrier_stats, key=lambda cs: cs.avg_cost)
         priciest = max(carrier_stats, key=lambda cs: cs.avg_cost)
         if cheapest.carrier != priciest.carrier:
             builder.add_action_item(
-                f"Cost range: ${cheapest.avg_cost:.2f} ({cheapest.carrier}) to ${priciest.avg_cost:.2f} ({priciest.carrier}). Evaluate cost-performance trade-offs."
+                f"Cost range: ${cheapest.avg_cost:.2f} ({cheapest.carrier}) to "
+                f"${priciest.avg_cost:.2f} ({priciest.carrier}). "
+                f"Evaluate cost-performance trade-offs."
             )
     exception_shipments = [s for s in recent_shipments.items if s.status == "exception"]
     if exception_shipments:
         builder.add_action_item(
-            f"{len(exception_shipments)} recent shipments in exception status — review for carrier issues."
+            f"{len(exception_shipments)} recent shipments in exception status "
+            f"— review for carrier issues."
         )
     if not builder._action_items:
         builder.add_action_item("Carrier performance metrics within expected range.")
