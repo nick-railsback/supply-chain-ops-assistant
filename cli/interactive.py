@@ -349,9 +349,7 @@ def render_report(report: ReportOutput) -> Panel:
 
         # Highlight callout
         if section.highlight:
-            renderables.append(
-                Text(f"  \u26a0 {section.highlight}", style="bold yellow")
-            )
+            renderables.append(Text(f"  \u26a0 {section.highlight}", style="bold yellow"))
 
         # Data table
         if section.data_table:
@@ -407,11 +405,7 @@ def render_reasoning_panel(plan: QueryPlan, routing: str, errors: list[str]) -> 
     source_color = _SOURCE_COLORS.get(source, "white")
 
     conf_color = (
-        "green"
-        if plan.confidence >= 0.75
-        else "yellow"
-        if plan.confidence >= 0.45
-        else "red"
+        "green" if plan.confidence >= 0.75 else "yellow" if plan.confidence >= 0.45 else "red"
     )
 
     rows: list[Any] = [
@@ -495,15 +489,11 @@ def display_action_proposal(proposal: ActionProposal) -> Panel:
         renderables.append(Text(""))
 
     # Target IDs
-    renderables.append(
-        Text(f"  Targets ({len(proposal.target_ids)}):", style="bold")
-    )
+    renderables.append(Text(f"  Targets ({len(proposal.target_ids)}):", style="bold"))
     for tid in proposal.target_ids[:20]:
         renderables.append(Text(f"    {tid}"))
     if len(proposal.target_ids) > 20:
-        renderables.append(
-            Text(f"    ... and {len(proposal.target_ids) - 20} more", style="dim")
-        )
+        renderables.append(Text(f"    ... and {len(proposal.target_ids) - 20} more", style="dim"))
 
     return Panel(
         Group(*renderables),
@@ -690,9 +680,7 @@ class InteractiveCLI:
         plan = result.get("plan")
         if plan is not None and self.show_reasoning:
             self.console.print(
-                render_reasoning_panel(
-                    plan, result.get("routing", ""), result.get("errors", [])
-                )
+                render_reasoning_panel(plan, result.get("routing", ""), result.get("errors", []))
             )
 
         if status == "clarify":

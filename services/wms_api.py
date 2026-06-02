@@ -169,16 +169,14 @@ async def list_center_inventory(
     condition = InventoryORM.fulfillment_center_id == center_id
 
     total = (
-        await session.execute(
-            select(func.count()).select_from(InventoryORM).where(condition)
-        )
+        await session.execute(select(func.count()).select_from(InventoryORM).where(condition))
     ).scalar_one()
 
     rows = (
-        await session.execute(
-            select(InventoryORM).where(condition).offset(offset).limit(limit)
-        )
-    ).scalars().all()
+        (await session.execute(select(InventoryORM).where(condition).offset(offset).limit(limit)))
+        .scalars()
+        .all()
+    )
 
     return PaginatedResponse[InventoryItem](
         items=[InventoryItem.model_validate(r) for r in rows],
@@ -207,23 +205,17 @@ async def list_movements(
         stmt = stmt.where(StockMovementORM.sku == sku)
         count_stmt = count_stmt.where(StockMovementORM.sku == sku)
     if fulfillment_center_id is not None:
-        stmt = stmt.where(
-            StockMovementORM.fulfillment_center_id == fulfillment_center_id
-        )
+        stmt = stmt.where(StockMovementORM.fulfillment_center_id == fulfillment_center_id)
         count_stmt = count_stmt.where(
             StockMovementORM.fulfillment_center_id == fulfillment_center_id
         )
     if movement_type is not None:
         stmt = stmt.where(StockMovementORM.movement_type == movement_type)
-        count_stmt = count_stmt.where(
-            StockMovementORM.movement_type == movement_type
-        )
+        count_stmt = count_stmt.where(StockMovementORM.movement_type == movement_type)
     if date_from is not None:
         date_from_str = date_from.isoformat()
         stmt = stmt.where(StockMovementORM.timestamp >= date_from_str)
-        count_stmt = count_stmt.where(
-            StockMovementORM.timestamp >= date_from_str
-        )
+        count_stmt = count_stmt.where(StockMovementORM.timestamp >= date_from_str)
     if date_to is not None:
         date_to_str = date_to.isoformat()
         stmt = stmt.where(StockMovementORM.timestamp <= date_to_str)

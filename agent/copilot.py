@@ -178,9 +178,7 @@ class Copilot:
     # Report generation
     # ------------------------------------------------------------------
 
-    async def generate_report(
-        self, report_request: str, data: dict[str, Any]
-    ) -> ReportOutput:
+    async def generate_report(self, report_request: str, data: dict[str, Any]) -> ReportOutput:
         """Generate a structured report from a request and data payload.
 
         Delegates to ``report_generator.generate_report`` which produces
@@ -196,9 +194,7 @@ class Copilot:
 # ===================================================================
 
 
-def _extract_filters(
-    filters: list[DataFilter], target_field: str
-) -> Any | None:
+def _extract_filters(filters: list[DataFilter], target_field: str) -> Any | None:
     """Return the value of the first filter matching *target_field*."""
     for f in filters:
         if f.field == target_field:

@@ -114,9 +114,7 @@ def _build_prompt(
 # ---------------------------------------------------------------------------
 
 # Pattern tuples: (compiled regex, intent, target_systems, primary_entity, extra_filters)
-_PATTERNS: list[
-    tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list[DataFilter]]
-] = [
+_PATTERNS: list[tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list[DataFilter]]] = [
     # --- Orders ---
     (
         re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
@@ -255,8 +253,17 @@ INTERPRET_TOOL_SCHEMA: dict = {
                     "operator": {
                         "type": "string",
                         "enum": [
-                            "eq", "neq", "in", "not_in", "gt", "gte",
-                            "lt", "lte", "between", "contains", "starts_with",
+                            "eq",
+                            "neq",
+                            "in",
+                            "not_in",
+                            "gt",
+                            "gte",
+                            "lt",
+                            "lte",
+                            "between",
+                            "contains",
+                            "starts_with",
                         ],
                     },
                     "value": {"description": "string, number, bool, or list"},
@@ -280,12 +287,16 @@ INTERPRET_TOOL_SCHEMA: dict = {
                 },
             },
             "required": [
-                "all_filter_fields_known", "entity_unambiguous",
-                "single_clear_intent", "time_reference_resolved",
+                "all_filter_fields_known",
+                "entity_unambiguous",
+                "single_clear_intent",
+                "time_reference_resolved",
             ],
         },
         "model_confidence": {
-            "type": "number", "minimum": 0, "maximum": 1,
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
             "description": "your own 0–1 confidence (stored for comparison)",
         },
     },
@@ -420,36 +431,48 @@ def _suggest_alternatives(user_query: str) -> list[str]:
 
     # Check for partial keyword matches
     if "order" in query_lower:
-        suggestions.extend([
-            "show all orders",
-            "list pending orders",
-            "show at-risk orders",
-        ])
+        suggestions.extend(
+            [
+                "show all orders",
+                "list pending orders",
+                "show at-risk orders",
+            ]
+        )
     if "exception" in query_lower or "error" in query_lower or "issue" in query_lower:
-        suggestions.extend([
-            "show exceptions",
-            "list critical exceptions",
-        ])
+        suggestions.extend(
+            [
+                "show exceptions",
+                "list critical exceptions",
+            ]
+        )
     if "inventory" in query_lower or "stock" in query_lower or "warehouse" in query_lower:
-        suggestions.extend([
-            "show inventory",
-            "show low-stock items",
-        ])
+        suggestions.extend(
+            [
+                "show inventory",
+                "show low-stock items",
+            ]
+        )
     if "shipment" in query_lower or "shipping" in query_lower or "delivery" in query_lower:
-        suggestions.extend([
-            "show shipments",
-            "show sla breaches",
-        ])
+        suggestions.extend(
+            [
+                "show shipments",
+                "show sla breaches",
+            ]
+        )
     if "update" in query_lower or "assign" in query_lower or "change" in query_lower:
-        suggestions.extend([
-            "assign exceptions to [name]",
-            "update order status to shipped",
-        ])
+        suggestions.extend(
+            [
+                "assign exceptions to [name]",
+                "update order status to shipped",
+            ]
+        )
     if "report" in query_lower:
-        suggestions.extend([
-            "generate exception summary report",
-            "show sla compliance report",
-        ])
+        suggestions.extend(
+            [
+                "generate exception summary report",
+                "show sla compliance report",
+            ]
+        )
 
     # If no partial matches, return supported categories
     if not suggestions:

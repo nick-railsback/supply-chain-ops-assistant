@@ -74,9 +74,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def _check_api_key(self) -> "Settings":
         if self.llm_enabled and self.anthropic_api_key == "not-set":
-            logger.warning(
-                "ANTHROPIC_API_KEY is not set. LLM features will be unavailable."
-            )
+            logger.warning("ANTHROPIC_API_KEY is not set. LLM features will be unavailable.")
         return self
 
 

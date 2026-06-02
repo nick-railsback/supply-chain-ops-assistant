@@ -35,15 +35,9 @@ class OpsClient:
             write=5.0,
             pool=5.0,
         )
-        self._oms = httpx.AsyncClient(
-            base_url=self._settings.oms_api_url, timeout=timeout
-        )
-        self._wms = httpx.AsyncClient(
-            base_url=self._settings.wms_api_url, timeout=timeout
-        )
-        self._tms = httpx.AsyncClient(
-            base_url=self._settings.tms_api_url, timeout=timeout
-        )
+        self._oms = httpx.AsyncClient(base_url=self._settings.oms_api_url, timeout=timeout)
+        self._wms = httpx.AsyncClient(base_url=self._settings.wms_api_url, timeout=timeout)
+        self._tms = httpx.AsyncClient(base_url=self._settings.tms_api_url, timeout=timeout)
 
     # ------------------------------------------------------------------
     # Context manager
@@ -102,9 +96,7 @@ class OpsClient:
 
         for attempt in range(2):  # 1 retry
             try:
-                response = await client.request(
-                    method, path, headers=headers, **kwargs
-                )
+                response = await client.request(method, path, headers=headers, **kwargs)
             except httpx.ConnectError:
                 raise ServiceUnavailableError(
                     service=service, detail=f"Connection failed for {method} {path}"
@@ -130,9 +122,7 @@ class OpsClient:
         response.raise_for_status()
         return response
 
-    def _parse_paginated(
-        self, data: dict[str, Any], model: type[T]
-    ) -> PaginatedResponse[T]:
+    def _parse_paginated(self, data: dict[str, Any], model: type[T]) -> PaginatedResponse[T]:
         """Parse a paginated JSON response into PaginatedResponse[T]."""
         return PaginatedResponse[model](  # type: ignore[valid-type]
             items=[model(**item) for item in data["items"]],
@@ -188,15 +178,11 @@ class OpsClient:
                 "limit": limit,
             }
         )
-        resp = await self._request(
-            self._oms, "GET", "/orders", service="oms", params=params
-        )
+        resp = await self._request(self._oms, "GET", "/orders", service="oms", params=params)
         return self._parse_paginated(resp.json(), Order)
 
     async def get_order(self, order_id: str) -> OrderWithLineItems:
-        resp = await self._request(
-            self._oms, "GET", f"/orders/{order_id}", service="oms"
-        )
+        resp = await self._request(self._oms, "GET", f"/orders/{order_id}", service="oms")
         return OrderWithLineItems(**resp.json())
 
     async def get_at_risk_orders(
@@ -230,15 +216,11 @@ class OpsClient:
                 "limit": limit,
             }
         )
-        resp = await self._request(
-            self._oms, "GET", "/exceptions", service="oms", params=params
-        )
+        resp = await self._request(self._oms, "GET", "/exceptions", service="oms", params=params)
         return self._parse_paginated(resp.json(), OrderException)
 
     async def get_exception_summary(self) -> ExceptionSummary:
-        resp = await self._request(
-            self._oms, "GET", "/exceptions/summary", service="oms"
-        )
+        resp = await self._request(self._oms, "GET", "/exceptions/summary", service="oms")
         return ExceptionSummary(**resp.json())
 
     async def update_order(self, order_id: str, changes: dict[str, Any]) -> Order:
@@ -247,9 +229,7 @@ class OpsClient:
         )
         return Order(**resp.json())
 
-    async def update_exception(
-        self, exception_id: str, changes: dict[str, Any]
-    ) -> OrderException:
+    async def update_exception(self, exception_id: str, changes: dict[str, Any]) -> OrderException:
         resp = await self._request(
             self._oms,
             "PATCH",
@@ -289,9 +269,7 @@ class OpsClient:
                 "limit": limit,
             }
         )
-        resp = await self._request(
-            self._wms, "GET", "/inventory", service="wms", params=params
-        )
+        resp = await self._request(self._wms, "GET", "/inventory", service="wms", params=params)
         return self._parse_paginated(resp.json(), InventoryItem)
 
     async def get_low_stock(
@@ -342,15 +320,11 @@ class OpsClient:
                 "limit": limit,
             }
         )
-        resp = await self._request(
-            self._wms, "GET", "/movements", service="wms", params=params
-        )
+        resp = await self._request(self._wms, "GET", "/movements", service="wms", params=params)
         return self._parse_paginated(resp.json(), StockMovement)
 
     async def get_utilization(self) -> list[FulfillmentCenter]:
-        resp = await self._request(
-            self._wms, "GET", "/stats/utilization", service="wms"
-        )
+        resp = await self._request(self._wms, "GET", "/stats/utilization", service="wms")
         return [FulfillmentCenter(**item) for item in resp.json()]
 
     # ==================================================================
@@ -381,15 +355,11 @@ class OpsClient:
                 "limit": limit,
             }
         )
-        resp = await self._request(
-            self._tms, "GET", "/shipments", service="tms", params=params
-        )
+        resp = await self._request(self._tms, "GET", "/shipments", service="tms", params=params)
         return self._parse_paginated(resp.json(), Shipment)
 
     async def get_shipment(self, shipment_id: str) -> ShipmentWithTracking:
-        resp = await self._request(
-            self._tms, "GET", f"/shipments/{shipment_id}", service="tms"
-        )
+        resp = await self._request(self._tms, "GET", f"/shipments/{shipment_id}", service="tms")
         return ShipmentWithTracking(**resp.json())
 
     async def get_sla_breaches(
@@ -408,20 +378,14 @@ class OpsClient:
         return [Shipment(**item) for item in resp.json()]
 
     async def get_carrier_performance(self) -> list[CarrierStats]:
-        resp = await self._request(
-            self._tms, "GET", "/stats/carrier-performance", service="tms"
-        )
+        resp = await self._request(self._tms, "GET", "/stats/carrier-performance", service="tms")
         return [CarrierStats(**item) for item in resp.json()]
 
     async def get_sla_summary(self) -> SLASummary:
-        resp = await self._request(
-            self._tms, "GET", "/stats/sla-summary", service="tms"
-        )
+        resp = await self._request(self._tms, "GET", "/stats/sla-summary", service="tms")
         return SLASummary(**resp.json())
 
-    async def update_shipment(
-        self, shipment_id: str, changes: dict[str, Any]
-    ) -> Shipment:
+    async def update_shipment(self, shipment_id: str, changes: dict[str, Any]) -> Shipment:
         resp = await self._request(
             self._tms,
             "PATCH",

@@ -50,9 +50,7 @@ async def check_services() -> bool:
         await client.aclose()
 
 
-async def run_scenario(
-    copilot: Copilot, title: str, query: str, explanation: str
-) -> None:
+async def run_scenario(copilot: Copilot, title: str, query: str, explanation: str) -> None:
     """Run a single demo scenario and display results."""
     console.print(f"\n{'=' * 60}")
     console.print(f"[bold cyan]{title}[/bold cyan]")

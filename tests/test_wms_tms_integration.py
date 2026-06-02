@@ -25,9 +25,7 @@ class TestWMSInventory:
             assert item["sku"] == "SKU-A100"
 
     async def test_list_inventory_center_filter(self, wms_client):
-        resp = await wms_client.get(
-            "/inventory", params={"fulfillment_center_id": "FC-EAST"}
-        )
+        resp = await wms_client.get("/inventory", params={"fulfillment_center_id": "FC-EAST"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
@@ -69,9 +67,7 @@ class TestTMSShipments:
             assert item["carrier"] == "FedEx"
 
     async def test_list_shipments_sla_status_filter(self, tms_client):
-        resp = await tms_client.get(
-            "/shipments", params={"sla_status": "breached"}
-        )
+        resp = await tms_client.get("/shipments", params={"sla_status": "breached"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 1

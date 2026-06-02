@@ -380,8 +380,7 @@ async def _dispatch_action(
             await client.update_shipment(target_id, changes)
         else:
             raise ValueError(
-                f"Cannot route bulk update for target '{target_id}': "
-                f"unknown ID prefix."
+                f"Cannot route bulk update for target '{target_id}': unknown ID prefix."
             )
     else:
         raise ValueError(f"Unsupported action type: {action_type}")

@@ -229,9 +229,7 @@ class TestExceptionSummaryReport:
         assert report.report_type == "exception_summary"
         assert len(report.sections) >= 2
         # Critical exception should generate an action item
-        critical_items = [
-            ai for ai in report.action_items if "critical" in ai.lower()
-        ]
+        critical_items = [ai for ai in report.action_items if "critical" in ai.lower()]
         assert len(critical_items) >= 1
         assert "EXC-001" in critical_items[0]
 
@@ -246,9 +244,7 @@ class TestSLAComplianceReport:
         report = _build_sla_compliance_report(data)
         assert report.report_type == "sla_compliance"
         # UPS at 85% should be flagged (below 90%)
-        low_perf_items = [
-            ai for ai in report.action_items if "UPS" in ai and "below 90%" in ai
-        ]
+        low_perf_items = [ai for ai in report.action_items if "UPS" in ai and "below 90%" in ai]
         assert len(low_perf_items) >= 1
 
 
@@ -274,9 +270,7 @@ class TestDailyVolumeTrendReport:
         report = _build_daily_volume_trend_report(data)
         assert report.report_type == "daily_volume_trend"
         # 150 vs 100 = 50% spike, should trigger action item
-        spike_items = [
-            ai for ai in report.action_items if "spike" in ai.lower()
-        ]
+        spike_items = [ai for ai in report.action_items if "spike" in ai.lower()]
         assert len(spike_items) >= 1
 
 
@@ -289,9 +283,7 @@ class TestCarrierPerformanceReport:
         report = _build_carrier_performance_report(data)
         assert report.report_type == "carrier_performance"
         # Best = FedEx (0.95), Worst = UPS (0.85) should be compared
-        comparison_items = [
-            ai for ai in report.action_items if "FedEx" in ai and "UPS" in ai
-        ]
+        comparison_items = [ai for ai in report.action_items if "FedEx" in ai and "UPS" in ai]
         assert len(comparison_items) >= 1
 
 

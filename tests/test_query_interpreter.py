@@ -52,9 +52,7 @@ class TestRuleBasedInterpret:
         assert plan is not None
         assert plan.intent == UserIntent.STATUS_CHECK
         assert TargetSystem.WMS in plan.target_systems
-        assert any(
-            f.field == "below_reorder_point" and f.value is True for f in plan.filters
-        )
+        assert any(f.field == "below_reorder_point" and f.value is True for f in plan.filters)
 
     def test_show_shipments(self):
         plan = _rule_based_interpret("show shipments")
@@ -68,9 +66,7 @@ class TestRuleBasedInterpret:
         assert plan is not None
         assert plan.intent == UserIntent.STATUS_CHECK
         assert TargetSystem.TMS in plan.target_systems
-        assert any(
-            f.field == "sla_status" and f.value == "breached" for f in plan.filters
-        )
+        assert any(f.field == "sla_status" and f.value == "breached" for f in plan.filters)
 
     def test_cross_system_orders_shipments(self):
         plan = _rule_based_interpret("correlate orders with shipments data")

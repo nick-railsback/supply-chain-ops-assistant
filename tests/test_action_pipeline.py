@@ -40,9 +40,7 @@ class TestExecuteAction:
         assert len(result.successful) == 1
         assert result.successful[0] == "ORD-2025-001"
         assert len(result.failed) == 0
-        client.update_order.assert_called_once_with(
-            "ORD-2025-001", {"status": "processing"}
-        )
+        client.update_order.assert_called_once_with("ORD-2025-001", {"status": "processing"})
 
     async def test_execute_action_assign_exception(self):
         """EXC prefix targets call patch_exception via ASSIGN_EXCEPTION."""
@@ -58,9 +56,7 @@ class TestExecuteAction:
         result = await execute_action(client, proposal, confirmed=True)
         assert len(result.successful) == 1
         assert result.successful[0] == "EXC-001"
-        client.update_exception.assert_called_once_with(
-            "EXC-001", {"assigned_to": "Sarah Chen"}
-        )
+        client.update_exception.assert_called_once_with("EXC-001", {"assigned_to": "Sarah Chen"})
 
     async def test_execute_action_bulk_shipment(self):
         """SHP prefix targets in BULK_UPDATE call update_shipment."""

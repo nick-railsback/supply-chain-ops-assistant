@@ -81,13 +81,9 @@ class DataGenerator:
         for idx, fc in enumerate(FULFILLMENT_CENTERS):
             center = dict(fc)  # shallow copy
             if idx in hot_indices:
-                center["current_utilization"] = round(
-                    random.uniform(0.86, 0.97), 2
-                )
+                center["current_utilization"] = round(random.uniform(0.86, 0.97), 2)
             else:
-                center["current_utilization"] = round(
-                    random.uniform(0.45, 0.80), 2
-                )
+                center["current_utilization"] = round(random.uniform(0.45, 0.80), 2)
             centers.append(center)
         return centers
 
@@ -133,9 +129,7 @@ class DataGenerator:
                         "quantity_available": quantity_available,
                         "quantity_reserved": quantity_reserved,
                         "reorder_point": random.randint(20, 60),
-                        "last_replenishment": (
-                            self.now - timedelta(days=random.randint(1, 14))
-                        )
+                        "last_replenishment": (self.now - timedelta(days=random.randint(1, 14)))
                         .date()
                         .isoformat(),
                     }
@@ -226,9 +220,7 @@ class DataGenerator:
                     "region": str(region_info["region"]),
                 },
                 "created_at": order_ts.isoformat(),
-                "updated_at": (
-                    order_ts + timedelta(hours=random.randint(0, 48))
-                ).isoformat(),
+                "updated_at": (order_ts + timedelta(hours=random.randint(0, 48))).isoformat(),
             }
 
             orders.append(order)
@@ -240,9 +232,7 @@ class DataGenerator:
     # Line items
     # ------------------------------------------------------------------
 
-    def _generate_line_items(
-        self, orders: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _generate_line_items(self, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Create 1-4 line items per order.
 
         Line-item status is consistent with the parent order status.
@@ -263,9 +253,7 @@ class DataGenerator:
 
         for order in orders:
             num_items = random.randint(1, 4)
-            chosen_products = random.sample(
-                PRODUCT_CATALOG, k=min(num_items, len(PRODUCT_CATALOG))
-            )
+            chosen_products = random.sample(PRODUCT_CATALOG, k=min(num_items, len(PRODUCT_CATALOG)))
             order_id = str(order["order_id"])
             fc_id = str(order["fulfillment_center_id"])
             order_status = str(order["status"])
@@ -313,9 +301,7 @@ class DataGenerator:
     # Exceptions
     # ------------------------------------------------------------------
 
-    def _generate_exceptions(
-        self, orders: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _generate_exceptions(self, orders: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Generate 40-60 open + 100+ resolved exceptions.
 
         SLA breach orders automatically get sla_at_risk exceptions.
@@ -326,9 +312,7 @@ class DataGenerator:
         # Ensure SLA-breach orders get exceptions
         for oid in self.ctx.get_sla_breach_orders():
             exc_seq += 1
-            created = self.now - timedelta(
-                hours=random.randint(6, 72)
-            )
+            created = self.now - timedelta(hours=random.randint(6, 72))
             exceptions.append(
                 {
                     "exception_id": f"EXC-{exc_seq:04d}",
@@ -344,12 +328,8 @@ class DataGenerator:
             self.ctx.exception_order_ids.add(oid)
 
         # Candidate orders for exceptions
-        exception_orders = [
-            o for o in orders if str(o["status"]) == "exception"
-        ]
-        other_orders = [
-            o for o in orders if str(o["status"]) not in ("cancelled", "delivered")
-        ]
+        exception_orders = [o for o in orders if str(o["status"]) == "exception"]
+        other_orders = [o for o in orders if str(o["status"]) not in ("cancelled", "delivered")]
 
         # Open exceptions: target 40-60
         open_target = random.randint(40, 60) - len(exceptions)
@@ -384,9 +364,7 @@ class DataGenerator:
 
         # Resolved exceptions: 100+
         resolved_target = random.randint(100, 140)
-        resolved_pool = random.sample(
-            orders, k=min(resolved_target * 2, len(orders))
-        )
+        resolved_pool = random.sample(orders, k=min(resolved_target * 2, len(orders)))
         resolved_count = 0
 
         for order in resolved_pool:
@@ -460,9 +438,7 @@ class DataGenerator:
             order_data = self.ctx.orders[order_id]
             order_created = datetime.fromisoformat(str(order_data["created_at"]))
 
-            ship_date = order_created + timedelta(
-                hours=random.randint(4, 36)
-            )
+            ship_date = order_created + timedelta(hours=random.randint(4, 36))
             est_delivery = ship_date + timedelta(days=random.randint(2, 7))
 
             sla_status = _weighted_choice(sla_status_options)
@@ -471,9 +447,7 @@ class DataGenerator:
             if sla_status == "breached":
                 self.ctx.register_sla_breach(order_id)
 
-            shipment_id = (
-                f"SHP-{ship_date.strftime('%Y%m%d')}-{seq:05d}"
-            )
+            shipment_id = f"SHP-{ship_date.strftime('%Y%m%d')}-{seq:05d}"
             self.ctx.shipment_order_map[shipment_id] = order_id
 
             shipments.append(
@@ -497,9 +471,7 @@ class DataGenerator:
     # Tracking events
     # ------------------------------------------------------------------
 
-    def _generate_tracking_events(
-        self, shipments: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def _generate_tracking_events(self, shipments: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Generate 2-6 tracking events per shipment with realistic progression."""
         event_progressions: list[str] = [
             "label_created",
@@ -523,9 +495,7 @@ class DataGenerator:
             else:
                 max_step = random.randint(2, 4)
 
-            num_events = min(
-                random.randint(2, 6), max_step
-            )
+            num_events = min(random.randint(2, 6), max_step)
             # Select the first num_events from the progression
             selected = event_progressions[:num_events]
 

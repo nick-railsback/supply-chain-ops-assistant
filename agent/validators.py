@@ -121,8 +121,7 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
 
         if not matched and plan.target_systems:
             errors.append(
-                f"Unknown field '{f.field}' for systems "
-                f"{[s.value for s in plan.target_systems]}."
+                f"Unknown field '{f.field}' for systems {[s.value for s in plan.target_systems]}."
             )
 
     # Cross-system query must specify a join key

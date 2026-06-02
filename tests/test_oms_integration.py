@@ -20,9 +20,7 @@ class TestListOrders:
             assert item["status"] == "pending"
 
     async def test_list_orders_combined_filter(self, oms_client):
-        resp = await oms_client.get(
-            "/orders", params={"status": "pending", "channel": "dtc_web"}
-        )
+        resp = await oms_client.get("/orders", params={"status": "pending", "channel": "dtc_web"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["total"] == 2
@@ -80,26 +78,20 @@ class TestExceptions:
 
 class TestPatchOrder:
     async def test_patch_order_valid(self, oms_client):
-        resp = await oms_client.patch(
-            "/orders/ORD-2025-001", json={"status": "processing"}
-        )
+        resp = await oms_client.patch("/orders/ORD-2025-001", json={"status": "processing"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "processing"
         assert data["order_id"] == "ORD-2025-001"
 
     async def test_patch_order_not_found(self, oms_client):
-        resp = await oms_client.patch(
-            "/orders/ORD-NONEXISTENT", json={"status": "processing"}
-        )
+        resp = await oms_client.patch("/orders/ORD-NONEXISTENT", json={"status": "processing"})
         assert resp.status_code == 404
 
 
 class TestPatchException:
     async def test_patch_exception_resolved(self, oms_client):
-        resp = await oms_client.patch(
-            "/exceptions/EXC-002", json={"status": "resolved"}
-        )
+        resp = await oms_client.patch("/exceptions/EXC-002", json={"status": "resolved"})
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "resolved"
