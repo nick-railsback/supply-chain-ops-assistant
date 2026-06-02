@@ -207,11 +207,60 @@ def format_carrier_stats_table(stats: list[dict[str, Any]]) -> Table:
     return table
 
 
+_SYSTEM_PREFIX_LABELS: dict[str, str] = {"oms_": "OMS", "wms_": "WMS", "tms_": "TMS"}
+
+
+def _humanize_cross_system_key(key: str) -> str:
+    """Turn a prefixed join field (``oms_status``) into a header (``OMS Status``)."""
+    for prefix, label in _SYSTEM_PREFIX_LABELS.items():
+        if key.startswith(prefix):
+            field = key[len(prefix) :].replace("_", " ").title()
+            return f"{label} {field}"
+    return key.replace("_", " ").title()
+
+
+def format_cross_system_table(rows: list[dict[str, Any]]) -> Table:
+    """Build a Rich table from correlated cross-system rows.
+
+    Correlated rows carry system-prefixed keys (``oms_status``, ``tms_carrier``)
+    produced by ``copilot._correlate_cross_system``. Columns are derived
+    dynamically from whichever systems and fields are present, so both sides of
+    the join render instead of being dropped by a single-system formatter.
+    """
+    table = Table(title="Cross-System Results", show_lines=False, expand=True)
+
+    # Preserve first-seen key order across all rows for stable columns.
+    columns: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+
+    for key in columns:
+        table.add_column(_humanize_cross_system_key(key))
+
+    for row in rows:
+        cells: list[Any] = []
+        for key in columns:
+            value = row.get(key, "")
+            if key.endswith("status"):
+                cells.append(_colorize(str(value)))
+            else:
+                cells.append(str(value))
+        table.add_row(*cells)
+
+    return table
+
+
 def _detect_data_type(items: list[dict[str, Any]]) -> str:
     """Heuristically detect the entity type from the first item's keys."""
     if not items:
         return "unknown"
     first = items[0]
+    # Correlated cross-system rows carry system-prefixed keys (oms_/wms_/tms_);
+    # detect them first so they don't fall through to a single-system formatter.
+    if any(k.startswith(("oms_", "wms_", "tms_")) for k in first):
+        return "cross_system"
     if "order_id" in first and "exception_type" in first:
         return "exceptions"
     if "order_id" in first and "total_value" in first:
@@ -248,6 +297,7 @@ def format_query_result(result: dict[str, Any]) -> Panel | Table | str:
         "inventory": format_inventory_table,
         "shipments": format_shipments_table,
         "carrier_stats": format_carrier_stats_table,
+        "cross_system": format_cross_system_table,
     }
 
     formatter = formatter_map.get(data_type)

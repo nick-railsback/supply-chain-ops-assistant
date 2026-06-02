@@ -2,10 +2,16 @@
 
 import pytest
 
-from agent.action_handler import _assess_risk, _detect_action_type, format_proposal_summary
+from agent.action_handler import (
+    _assess_risk,
+    _detect_action_type,
+    format_proposal_summary,
+    propose_action,
+)
+from agent.validators import validate_action_proposal
+from config.settings import get_settings
 from models.action import ActionProposal, ActionType
 from models.shared import RiskLevel
-
 
 # ---------------------------------------------------------------------------
 # _assess_risk tests
@@ -83,3 +89,46 @@ class TestFormatProposalSummary:
         assert "Sarah Chen" in summary
         assert "medium" in summary
         assert "assign_exception" in summary
+
+
+# ---------------------------------------------------------------------------
+# propose_action — B4 regression
+# ---------------------------------------------------------------------------
+
+
+class TestProposeActionStatusUpdate:
+    """Regression tests for B4: UPDATE_ORDER_STATUS proposals must inject
+    ``current_status`` from the target row so the transition validator can run,
+    instead of always failing with the missing-current_status guard.
+    """
+
+    async def test_injects_current_status_and_passes_validation(self, monkeypatch):
+        """A valid pending -> confirmed request yields a proposal that validates."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        row = {
+            "order_id": "ORD-2025-001",
+            "status": "pending",
+            "changes": {"status": "confirmed"},
+        }
+        proposal = await propose_action(None, "update order status to confirmed", [row])
+
+        assert proposal.changes.get("current_status") == "pending"
+        assert await validate_action_proposal(proposal) == []
+
+    async def test_invalid_transition_fails_on_transition_rule(self, monkeypatch):
+        """An invalid pending -> delivered request fails on the transition rule,
+        not on the missing-current_status guard."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        row = {
+            "order_id": "ORD-2025-001",
+            "status": "pending",
+            "changes": {"status": "delivered"},
+        }
+        with pytest.raises(ValueError) as exc_info:
+            await propose_action(None, "update order status to delivered", [row])
+
+        message = str(exc_info.value)
+        assert "Invalid status transition" in message
+        assert "current_status" not in message
