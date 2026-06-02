@@ -78,17 +78,6 @@ ORDER_STATUS_TRANSITIONS: dict[str, list[str]] = {
 }
 
 # ---------------------------------------------------------------------------
-# Map target system to entity name used in the field registry
-# ---------------------------------------------------------------------------
-
-_SYSTEM_ENTITY_MAP: dict[str, str] = {
-    "oms": "order",
-    "wms": "inventory",
-    "tms": "shipment",
-}
-
-
-# ---------------------------------------------------------------------------
 # Validators
 # ---------------------------------------------------------------------------
 
@@ -108,11 +97,19 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
     for f in plan.filters:
         matched = False
         for system in plan.target_systems:
-            entity = _SYSTEM_ENTITY_MAP.get(system.value, plan.primary_entity)
-            key = (system.value, entity, f.field)
-            if key in FIELD_REGISTRY:
+            # A system can host more than one entity (oms → orders AND
+            # exceptions), so match the field against any entity registered
+            # under it rather than a single hard-coded entity.
+            field_type = next(
+                (
+                    ftype
+                    for (sys, _entity, field), ftype in FIELD_REGISTRY.items()
+                    if sys == system.value and field == f.field
+                ),
+                None,
+            )
+            if field_type is not None:
                 matched = True
-                field_type = FIELD_REGISTRY[key]
                 valid_ops = VALID_OPERATORS.get(field_type, [])
                 if f.operator not in valid_ops:
                     errors.append(
