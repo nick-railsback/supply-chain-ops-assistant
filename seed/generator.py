@@ -205,6 +205,15 @@ class DataGenerator:
             ship_city = self.fake.city()
             ship_zip = self.fake.zipcode()
 
+            # Promised delivery date. Still-active orders are promised in the near
+            # future relative to now, so a meaningful subset lands inside the
+            # /orders/at-risk window ([now, now+2d]); terminal/shipped orders carry
+            # a historical promise relative to their creation.
+            if status in ("pending", "processing", "exception"):
+                promised_ts = self.now + timedelta(days=random.randint(1, 5))
+            else:
+                promised_ts = order_ts + timedelta(days=random.randint(2, 5))
+
             order: dict[str, Any] = {
                 "order_id": order_id,
                 "status": status,
@@ -221,6 +230,7 @@ class DataGenerator:
                 },
                 "created_at": order_ts.isoformat(),
                 "updated_at": (order_ts + timedelta(hours=random.randint(0, 48))).isoformat(),
+                "promised_delivery_date": promised_ts.isoformat(),
             }
 
             orders.append(order)

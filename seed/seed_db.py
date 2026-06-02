@@ -222,7 +222,7 @@ def _map_orders(
                 "channel": o["channel"],
                 "created_at": o["created_at"],
                 "updated_at": o["updated_at"],
-                "promised_delivery_date": None,
+                "promised_delivery_date": o.get("promised_delivery_date"),
                 "fulfillment_center_id": o["fulfillment_center_id"],
                 "total_value": round(order_totals.get(oid, 0.0), 2),
                 "currency": "USD",
