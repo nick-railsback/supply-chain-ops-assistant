@@ -315,9 +315,8 @@ def main() -> None:
 
             if not get_settings().is_llm_available:
                 console.print(
-                    "[yellow]llm arm skipped:[/yellow] set ANTHROPIC_API_KEY and install "
-                    "`anthropic` to run it. (See the Tier B spec — the LLM path is being "
-                    "hardened to tool-use.)"
+                    "[yellow]llm arm skipped:[/yellow] set ANTHROPIC_API_KEY (and install "
+                    "`anthropic`) to run the Claude tool-use interpreter against the gold set."
                 )
                 continue
             arms[name] = run_arm(llm_interpret, dataset)

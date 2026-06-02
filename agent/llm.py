@@ -89,24 +89,30 @@ async def structured_call(
     tool_choice: ToolChoiceToolParam = {"type": "tool", "name": tool_name}  # forced
     messages: list[MessageParam] = [{"role": "user", "content": user}]
 
-    message = await client.messages.create(
-        model=settings.llm_model,
-        system=[text_block],
-        tools=[tool],
-        tool_choice=tool_choice,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        messages=messages,
-    )
+    # A fresh client per call is created above; always close it so its underlying
+    # httpx AsyncClient is torn down inside the running loop (otherwise it is
+    # finalized after the loop closes -> "Event loop is closed" noise per call).
+    try:
+        message = await client.messages.create(
+            model=settings.llm_model,
+            system=[text_block],
+            tools=[tool],
+            tool_choice=tool_choice,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            messages=messages,
+        )
 
-    usage = {
-        "input_tokens": message.usage.input_tokens,
-        "output_tokens": message.usage.output_tokens,
-    }
+        usage = {
+            "input_tokens": message.usage.input_tokens,
+            "output_tokens": message.usage.output_tokens,
+        }
 
-    for block in message.content:
-        if isinstance(block, anthropic.types.ToolUseBlock) and block.name == tool_name:
-            logger.debug("structured_call %s ok usage=%s", tool_name, usage)
-            return cast("dict[str, Any]", block.input), usage
+        for block in message.content:
+            if isinstance(block, anthropic.types.ToolUseBlock) and block.name == tool_name:
+                logger.debug("structured_call %s ok usage=%s", tool_name, usage)
+                return cast("dict[str, Any]", block.input), usage
 
-    raise ValueError(f"Model did not return a '{tool_name}' tool_use block")
+        raise ValueError(f"Model did not return a '{tool_name}' tool_use block")
+    finally:
+        await client.close()
