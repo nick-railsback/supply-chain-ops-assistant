@@ -97,23 +97,56 @@ class TestFormatProposalSummary:
 
 
 class TestProposeActionStatusUpdate:
-    """Regression tests for B4: UPDATE_ORDER_STATUS proposals must inject
-    ``current_status`` from the target row so the transition validator can run,
-    instead of always failing with the missing-current_status guard.
+    """Regression tests for B4: UPDATE_ORDER_STATUS proposals must capture the
+    order's ``current_status`` so the transition validator can run — as
+    validator-only metadata (``ActionProposal.current_status``), never leaked
+    into the dispatched ``changes``.
     """
 
-    async def test_injects_current_status_and_passes_validation(self, monkeypatch):
-        """A valid pending -> confirmed request yields a proposal that validates."""
+    async def test_captures_current_status_and_passes_validation(self, monkeypatch):
+        """A valid pending -> processing request validates, with current_status
+        captured off-band rather than mixed into the dispatched changes."""
         monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
 
         row = {
             "order_id": "ORD-2025-001",
             "status": "pending",
-            "changes": {"status": "confirmed"},
+            "changes": {"status": "processing"},
         }
-        proposal = await propose_action(None, "update order status to confirmed", [row])
+        proposal = await propose_action(None, "update order status to processing", [row])
 
-        assert proposal.changes.get("current_status") == "pending"
+        assert proposal.current_status == "pending"
+        assert "current_status" not in proposal.changes
+        assert await validate_action_proposal(proposal) == []
+
+    async def test_current_status_not_dispatched_or_rendered(self, monkeypatch):
+        """current_status is validator-only: it must not appear in the changes
+        sent to the backend or in the human-facing proposal summary."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        row = {
+            "order_id": "ORD-2025-001",
+            "status": "pending",
+            "changes": {"status": "processing"},
+        }
+        proposal = await propose_action(None, "update order status to processing", [row])
+
+        assert proposal.changes == {"status": "processing"}
+        assert "current_status" not in format_proposal_summary(proposal)
+
+    async def test_shipped_to_delivered_is_valid(self, monkeypatch):
+        """The corrected transition map allows the real shipped -> delivered move
+        (the drifted map only allowed shipped -> in_transit)."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        row = {
+            "order_id": "ORD-2025-002",
+            "status": "shipped",
+            "changes": {"status": "delivered"},
+        }
+        proposal = await propose_action(None, "update order status to delivered", [row])
+
+        assert proposal.current_status == "shipped"
         assert await validate_action_proposal(proposal) == []
 
     async def test_invalid_transition_fails_on_transition_rule(self, monkeypatch):
@@ -131,4 +164,3 @@ class TestProposeActionStatusUpdate:
 
         message = str(exc_info.value)
         assert "Invalid status transition" in message
-        assert "current_status" not in message

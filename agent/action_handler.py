@@ -189,18 +189,16 @@ async def propose_action(
         changes = relevant_data[0].get("changes", {})
 
     # Status updates need the order's current status to validate the transition.
-    # The validator requires both the new status and current_status; inject the
-    # latter from the target row when the request omits it (copy, don't mutate
-    # the caller's data).
+    # Capture it as validator-only metadata (ActionProposal.current_status) from
+    # the target row — never into `changes`, so it can't leak onto the wire, into
+    # the impact summary, or into the human-facing proposal summary.
+    current_status: str | None = None
     if (
         action_type == ActionType.UPDATE_ORDER_STATUS
         and changes.get("status")
-        and "current_status" not in changes
         and relevant_data
     ):
         current_status = relevant_data[0].get("status")
-        if current_status:
-            changes = {**changes, "current_status": current_status}
 
     target_count = len(target_ids)
     risk = _assess_risk(target_count, changes)
@@ -221,6 +219,7 @@ async def propose_action(
         impact_summary=impact,
         risk_level=risk,
         requires_confirmation=risk != RiskLevel.LOW or target_count > 5,
+        current_status=current_status,
     )
 
     errors = await validate_action_proposal(proposal)

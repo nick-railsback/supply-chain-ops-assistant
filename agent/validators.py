@@ -66,16 +66,15 @@ VALID_OPERATORS: dict[str, list[str]] = {
 # Order status transition map
 # ---------------------------------------------------------------------------
 
+# Keys and values are real OrderStatus members only (see models/oms.py).
+# delivered and cancelled are terminal.
 ORDER_STATUS_TRANSITIONS: dict[str, list[str]] = {
-    "pending": ["confirmed", "cancelled"],
-    "confirmed": ["processing", "cancelled"],
-    "processing": ["shipped", "cancelled"],
-    "shipped": ["in_transit"],
-    "in_transit": ["delivered", "exception"],
-    "delivered": ["returned"],
+    "pending": ["processing", "cancelled"],
+    "processing": ["shipped", "cancelled", "exception"],
+    "shipped": ["delivered", "exception"],
+    "delivered": [],
     "exception": ["processing", "cancelled"],
     "cancelled": [],
-    "returned": [],
 }
 
 # ---------------------------------------------------------------------------
@@ -157,7 +156,7 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
     # Status transition validation for order status updates
     if proposal.action_type == ActionType.UPDATE_ORDER_STATUS:
         new_status = proposal.changes.get("status")
-        current_status = proposal.changes.get("current_status")
+        current_status = proposal.current_status
 
         if new_status and current_status:
             allowed = ORDER_STATUS_TRANSITIONS.get(current_status, [])
@@ -168,7 +167,7 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
                 )
         elif new_status and not current_status:
             errors.append(
-                "Status update requires 'current_status' in changes to validate transition."
+                "Status update requires current_status to validate the transition."
             )
 
     return errors
