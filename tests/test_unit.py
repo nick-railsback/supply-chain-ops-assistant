@@ -121,6 +121,17 @@ class TestValidation:
         errors = await validate_query_plan(plan)
         assert any("not_a_real_field" in e for e in errors)
 
+    async def test_at_risk_filter_field_validates(self, sample_query_plan):
+        """The rule interpreter emits DataFilter(field='at_risk') for at-risk
+        queries; the OMS order schema must accept it, or validation rejects the
+        plan before the at_risk dispatch branch can run."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="at_risk", operator="eq", value=True)],
+        )
+        errors = await validate_query_plan(plan)
+        assert errors == []
+
 
 class TestPydanticModels:
     def test_query_plan_confidence_bounds(self):

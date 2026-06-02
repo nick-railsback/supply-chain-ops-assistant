@@ -24,6 +24,7 @@ FIELD_REGISTRY: dict[tuple[str, str, str], str] = {
     ("oms", "order", "date_range_end"): "date",
     ("oms", "order", "order_value"): "numeric",
     ("oms", "order", "priority"): "enum",
+    ("oms", "order", "at_risk"): "boolean",
     # OMS — exceptions
     ("oms", "exception", "exception_type"): "enum",
     ("oms", "exception", "severity"): "enum",
