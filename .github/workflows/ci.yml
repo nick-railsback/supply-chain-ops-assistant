@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least-privilege by default; jobs only read repo contents.
+permissions:
+  contents: read
+
+# Cancel superseded runs on the same ref to save CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Lint, type-check & test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # v8.2.0
+        with:
+          python-version: "3.11"
+          enable-cache: true
+
+      # --frozen: install exactly what uv.lock pins (hash-verified) and fail if
+      # pyproject.toml and uv.lock have drifted. This is the supply-chain boundary.
+      - name: Install dependencies (locked)
+        run: uv sync --frozen
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        run: uv run ruff format --check .
+
+      - name: Type-check
+        run: uv run mypy agent models services seed cli config
+
+      # Exclude live-LLM tests (they require an ANTHROPIC_API_KEY).
+      - name: Tests
+        run: uv run pytest -m "not llm"
+
+  supply-chain:
+    name: OSV vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9f698171ed81b15d1823a05fc7211befd50c8ae0 # v6.0.3
+
+      # Scans uv.lock against the OSV database and fails the build on any known
+      # vulnerability. Renovate (renovate.json) opens the fix PRs.
+      - name: Scan uv.lock with OSV-Scanner
+        uses: google/osv-scanner-action/osv-scanner-action@9a498708959aeaef5ef730655706c5a1df1edbc2 # v2.3.8
+        with:
+          scan-args: |-
+            --lockfile=uv.lock

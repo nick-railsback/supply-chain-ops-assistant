@@ -166,8 +166,6 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
                     f"Allowed transitions: {allowed}"
                 )
         elif new_status and not current_status:
-            errors.append(
-                "Status update requires current_status to validate the transition."
-            )
+            errors.append("Status update requires current_status to validate the transition.")
 
     return errors
