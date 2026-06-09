@@ -195,11 +195,7 @@ async def propose_action(
     # the target row — never into `changes`, so it can't leak onto the wire, into
     # the impact summary, or into the human-facing proposal summary.
     current_status: str | None = None
-    if (
-        action_type == ActionType.UPDATE_ORDER_STATUS
-        and changes.get("status")
-        and relevant_data
-    ):
+    if action_type == ActionType.UPDATE_ORDER_STATUS and changes.get("status") and relevant_data:
         current_status = relevant_data[0].get("status")
 
     target_count = len(target_ids)
