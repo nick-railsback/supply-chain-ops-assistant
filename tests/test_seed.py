@@ -6,10 +6,12 @@ promised_delivery_date to None, so the feature returned zero rows regardless of
 order state. These tests pin the seed path to populate it.
 """
 
+import sqlite3
 from datetime import timedelta
+from pathlib import Path
 
 from seed.generator import DataGenerator
-from seed.seed_db import _map_orders
+from seed.seed_db import _create_tables, _map_orders
 
 _ACTIVE_STATUSES = {"pending", "processing", "exception"}
 
@@ -83,3 +85,39 @@ def test_mapped_shipments_have_destinations_and_valid_statuses():
     valid = {s.value for s in ShipmentStatus}
     assert all(r["destination_zip"] and r["destination_state"] for r in rows)
     assert all(r["status"] in valid for r in rows)
+
+
+async def test_reset_recreates_drifted_schema(tmp_path):
+    """The compose seed service relies on --reset to cure schema drift: a
+    pre-existing ./data volume created before new columns (shipments.flagged,
+    orders.priority) only picks up the current schema via drop-and-recreate —
+    create_all alone never ALTERs an existing table, leaving every read to
+    fail with 'no such column'."""
+    from services.tms_api import Base as TMSBase
+
+    db = tmp_path / "tms.db"
+    with sqlite3.connect(db) as conn:
+        conn.execute("CREATE TABLE shipments (shipment_id TEXT PRIMARY KEY, order_id TEXT)")
+        conn.execute("INSERT INTO shipments VALUES ('SHP-1', 'ORD-1')")
+
+    def columns() -> set[str]:
+        with sqlite3.connect(db) as conn:
+            return {row[1] for row in conn.execute("PRAGMA table_info(shipments)")}
+
+    # Without reset, the stale schema survives — the documented failure mode.
+    await _create_tables(TMSBase.metadata, db, drop_first=False)
+    assert "flagged" not in columns()
+
+    # With reset (what compose runs), the real schema lands.
+    await _create_tables(TMSBase.metadata, db, drop_first=True)
+    assert "flagged" in columns()
+
+
+def test_compose_seed_service_resets():
+    """docker-compose's seed service must pass --reset (parity with the
+    Makefile's seed target); without it a volume from an older schema 500s
+    on every request until the flag is discovered by hand."""
+    compose = (Path(__file__).resolve().parent.parent / "docker-compose.yml").read_text()
+    seed_commands = [line for line in compose.splitlines() if "seed.seed_db" in line]
+    assert seed_commands, "compose must define the seed service command"
+    assert all("--reset" in line for line in seed_commands)
