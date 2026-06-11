@@ -129,6 +129,30 @@ def _assess_risk(
     return RiskLevel.LOW
 
 
+def _apply_risk_floor(
+    action_type: ActionType | None,
+    target_ids: list[str],
+    changes: dict[str, Any],
+    claimed_risk: RiskLevel | str | None = None,
+    claimed_confirm: bool = False,
+) -> tuple[RiskLevel, bool]:
+    """Merge the server-computed risk floor with claimed values, raise-only.
+
+    The single place the floor formula lives: ``propose_action`` applies it
+    when a proposal is built, and ``execute_action`` re-applies it at the
+    mutation boundary — so a proposal constructed or mutated anywhere else
+    cannot carry a lowered gate past the floor.
+    """
+    target_count = len(target_ids)
+    risk = _assess_risk(target_count, changes, action_type)
+    if isinstance(claimed_risk, str) and claimed_risk in {r.value for r in RiskLevel}:
+        claimed_risk = RiskLevel(claimed_risk)
+    if isinstance(claimed_risk, RiskLevel):
+        risk = max(risk, claimed_risk, key=_RISK_ORDER.__getitem__)
+    confirm = risk != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX
+    return risk, confirm or claimed_confirm
+
+
 # ===================================================================
 # Keyword-based action type detection
 # ===================================================================
@@ -193,17 +217,17 @@ async def propose_action(
             # let the claim raise risk/confirmation, never lower them (SEC-1).
             claimed_risk = data.pop("risk_level", None)
             claimed_confirm = bool(data.pop("requires_confirmation", False))
-            target_count = len(data.get("target_ids", []))
             try:
                 proposed_type = ActionType(data.get("action_type", ""))
             except ValueError:
                 proposed_type = None  # model_validate rejects it below
-            computed = _assess_risk(target_count, data.get("changes", {}), proposed_type)
-            if claimed_risk in {r.value for r in RiskLevel}:
-                computed = max(computed, RiskLevel(claimed_risk), key=_RISK_ORDER.__getitem__)
-            data["risk_level"] = computed
-            confirm_floor = computed != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX
-            data["requires_confirmation"] = confirm_floor or claimed_confirm
+            data["risk_level"], data["requires_confirmation"] = _apply_risk_floor(
+                proposed_type,
+                data.get("target_ids", []),
+                data.get("changes", {}),
+                claimed_risk,
+                claimed_confirm,
+            )
             # Mirror the rule path: the transition validator needs the order's
             # current status, which the model must never supply itself.
             data.pop("current_status", None)
@@ -253,7 +277,7 @@ async def propose_action(
         current_status = relevant_data[0].get("status")
 
     target_count = len(target_ids)
-    risk = _assess_risk(target_count, changes, action_type)
+    risk, requires_confirmation = _apply_risk_floor(action_type, target_ids, changes)
 
     # Build human-readable impact summary
     entity_word = "entity" if target_count == 1 else "entities"
@@ -270,7 +294,7 @@ async def propose_action(
         reasoning=f"Action requested via: {user_query}",
         impact_summary=impact,
         risk_level=risk,
-        requires_confirmation=risk != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX,
+        requires_confirmation=requires_confirmation,
         current_status=current_status,
     )
 
@@ -358,12 +382,23 @@ async def execute_action(
     ``proposal.action_type``, tracks per-target success/failure, and returns
     an ``ActionResult``.
 
-    Fail-safe gate: if ``proposal.requires_confirmation`` is set, this refuses
-    to mutate anything unless ``confirmed=True`` is passed explicitly (obtained
-    from ``confirm_action`` or the CLI's ``prompt_confirmation``). Otherwise it
-    raises ``ActionNotConfirmedError`` before touching any backend.
+    Fail-safe gate: the confirmation floor is recomputed here, at the mutation
+    boundary, from the proposal's own targets and changes — merged raise-only
+    with the carried ``requires_confirmation`` — so a proposal constructed or
+    mutated outside ``propose_action`` cannot lower its own gate. If the
+    resulting floor requires confirmation, this refuses to mutate anything
+    unless ``confirmed=True`` is passed explicitly (obtained from
+    ``confirm_action`` or the CLI's ``prompt_confirmation``) and raises
+    ``ActionNotConfirmedError`` before touching any backend.
     """
-    if proposal.requires_confirmation and not confirmed:
+    _, requires_confirmation = _apply_risk_floor(
+        proposal.action_type,
+        proposal.target_ids,
+        proposal.changes,
+        proposal.risk_level,
+        proposal.requires_confirmation,
+    )
+    if requires_confirmation and not confirmed:
         raise ActionNotConfirmedError(
             f"Refusing to execute {proposal.action_type.value}: proposal requires "
             f"confirmation but was not confirmed."

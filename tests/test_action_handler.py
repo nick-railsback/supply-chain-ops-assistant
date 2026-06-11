@@ -5,8 +5,10 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from agent.action_handler import (
+    ActionNotConfirmedError,
     _assess_risk,
     _detect_action_type,
+    execute_action,
     format_proposal_summary,
     propose_action,
 )
@@ -373,6 +375,76 @@ class TestProposeActionPrompt:
             await propose_action(None, "assign exception", [{}])
 
         assert call.await_args.kwargs["system"] == PROPOSE_ACTION_SYSTEM_PROMPT
+
+
+class TestExecuteActionRecomputesFloor:
+    """execute_action re-derives the confirmation floor from the proposal's
+    own targets/changes at the mutation boundary, merging raise-only with the
+    carried values — a proposal constructed or mutated with a lowered gate
+    cannot reach the backends unconfirmed."""
+
+    async def test_constructed_with_lowered_gate_is_refused(self):
+        proposal = ActionProposal(
+            action_type=ActionType.BULK_UPDATE,
+            target_ids=[f"ORD-2025-{i:04d}" for i in range(50)],
+            changes={"status": "processing"},
+            reasoning="constructed outside propose_action",
+            impact_summary="50 orders",
+            risk_level=RiskLevel.LOW,
+            requires_confirmation=False,
+        )
+        client = AsyncMock()
+
+        with pytest.raises(ActionNotConfirmedError):
+            await execute_action(client, proposal)
+        client.update_order.assert_not_awaited()
+
+    async def test_mutated_after_construction_is_refused(self):
+        proposal = ActionProposal(
+            action_type=ActionType.UPDATE_ORDER_STATUS,
+            target_ids=["ORD-2025-0001"],
+            changes={"status": "cancelled"},
+            reasoning="cancel order",
+            impact_summary="1 order",
+            risk_level=RiskLevel.HIGH,
+            requires_confirmation=True,
+        )
+        proposal.requires_confirmation = False
+        client = AsyncMock()
+
+        with pytest.raises(ActionNotConfirmedError):
+            await execute_action(client, proposal)
+        client.update_order.assert_not_awaited()
+
+    async def test_genuinely_low_risk_proposal_still_executes(self):
+        proposal = ActionProposal(
+            action_type=ActionType.ASSIGN_EXCEPTION,
+            target_ids=["EXC-0001"],
+            changes={"assigned_to": "Sarah Chen"},
+            reasoning="single assign",
+            impact_summary="1 exception",
+            risk_level=RiskLevel.LOW,
+            requires_confirmation=False,
+        )
+        client = AsyncMock()
+
+        result = await execute_action(client, proposal)
+        assert result.successful == ["EXC-0001"]
+
+    async def test_confirmed_high_risk_proposal_executes(self):
+        proposal = ActionProposal(
+            action_type=ActionType.UPDATE_ORDER_STATUS,
+            target_ids=["ORD-2025-0001"],
+            changes={"status": "cancelled"},
+            reasoning="cancel order",
+            impact_summary="1 order",
+            risk_level=RiskLevel.HIGH,
+            requires_confirmation=True,
+        )
+        client = AsyncMock()
+
+        result = await execute_action(client, proposal, confirmed=True)
+        assert result.successful == ["ORD-2025-0001"]
 
 
 class TestProposeActionLLMCurrentStatus:
