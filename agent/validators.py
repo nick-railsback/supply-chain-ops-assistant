@@ -143,13 +143,10 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
     if not proposal.target_ids:
         errors.append("ActionProposal must specify at least one target_id.")
 
-    # Bulk update cap
-    if (
-        proposal.action_type == ActionType.BULK_UPDATE
-        and len(proposal.target_ids) > settings.bulk_update_cap
-    ):
+    # Target cap — applies to every action type, not just bulk_update
+    if len(proposal.target_ids) > settings.bulk_update_cap:
         errors.append(
-            f"Bulk update affects {len(proposal.target_ids)} entities, "
+            f"Action affects {len(proposal.target_ids)} entities, "
             f"exceeding the cap of {settings.bulk_update_cap}."
         )
 

@@ -217,3 +217,84 @@ class TestProposeActionLLM:
 
         # Fell back to the rule path, which builds reasoning from the query.
         assert proposal.reasoning.startswith("Action requested via:")
+
+
+# ---------------------------------------------------------------------------
+# propose_action — server-side risk recompute (SEC-1)
+# ---------------------------------------------------------------------------
+
+
+class TestProposeActionRiskFloor:
+    """The model's risk claims are advisory: server recompute can raise risk
+    and requires_confirmation, never lower them (SEC-1)."""
+
+    async def test_llm_cannot_lower_requires_confirmation(self, monkeypatch):
+        # 12 targets -> rule floor is HIGH/confirm, whatever the model claims.
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "bulk_update",
+            "target_ids": [f"EXC-{i:04d}" for i in range(12)],
+            "changes": {"status": "investigating"},
+            "reasoning": "bulk triage",
+            "impact_summary": "12 exceptions",
+            "risk_level": "low",
+            "requires_confirmation": False,
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(None, "bulk update exceptions", [{}])
+
+        assert proposal.risk_level == RiskLevel.HIGH
+        assert proposal.requires_confirmation is True
+
+    async def test_llm_can_raise_but_not_lower_risk(self, monkeypatch):
+        # 1 target, model claims high -> stays HIGH (raise allowed).
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        claims_high = {
+            "action_type": "assign_exception",
+            "target_ids": ["EXC-0001"],
+            "changes": {"assigned_to": "Sarah Chen"},
+            "reasoning": "single assign",
+            "impact_summary": "1 exception",
+            "risk_level": "high",
+            "requires_confirmation": True,
+        }
+        call = AsyncMock(return_value=(claims_high, {"input_tokens": 1, "output_tokens": 1}))
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(None, "assign exception", [{}])
+        assert proposal.risk_level == RiskLevel.HIGH
+
+        # 1 target, no claim -> LOW (computed), no confirmation needed.
+        no_claim = {
+            "action_type": "assign_exception",
+            "target_ids": ["EXC-0001"],
+            "changes": {"assigned_to": "Sarah Chen"},
+            "reasoning": "single assign",
+            "impact_summary": "1 exception",
+        }
+        call = AsyncMock(return_value=(no_claim, {"input_tokens": 1, "output_tokens": 1}))
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(None, "assign exception", [{}])
+        assert proposal.risk_level == RiskLevel.LOW
+        assert proposal.requires_confirmation is False
+
+    async def test_schema_omits_server_side_fields(self, monkeypatch):
+        # Capture the input_schema kwarg; risk_level / requires_confirmation /
+        # current_status must be absent from properties AND from "required".
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "assign_exception",
+            "target_ids": ["EXC-0001"],
+            "changes": {"assigned_to": "Sarah Chen"},
+            "reasoning": "single assign",
+            "impact_summary": "1 exception",
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        with patch("agent.action_handler.structured_call", call):
+            await propose_action(None, "assign exception", [{}])
+
+        schema = call.await_args.kwargs["input_schema"]
+        properties = schema.get("properties", {})
+        for field in ("risk_level", "requires_confirmation", "current_status"):
+            assert field not in properties, field
+        assert "risk_level" not in schema.get("required", [])

@@ -75,6 +75,22 @@ class TestValidation:
         errors = await validate_action_proposal(proposal)
         assert any("bulk" in e.lower() or "cap" in e.lower() or "50" in e for e in errors)
 
+    async def test_cap_applies_to_all_action_types(self, sample_action_proposal):
+        # The cap is not bulk-only: 51 targets fails for FLAG_SHIPMENTS too;
+        # exactly 50 passes (boundary).
+        over = sample_action_proposal(
+            action_type=ActionType.FLAG_SHIPMENTS,
+            target_ids=[f"SHP-{i:08d}-00001" for i in range(51)],
+        )
+        at_cap = sample_action_proposal(
+            action_type=ActionType.FLAG_SHIPMENTS,
+            target_ids=[f"SHP-{i:08d}-00001" for i in range(50)],
+        )
+        over_errors = await validate_action_proposal(over)
+        assert over_errors != []
+        assert all("cap" in e.lower() or "50" in e for e in over_errors)
+        assert await validate_action_proposal(at_cap) == []
+
     async def test_cross_system_requires_join_key(self, sample_query_plan):
         plan = sample_query_plan(
             target_systems=[TargetSystem.OMS, TargetSystem.WMS],

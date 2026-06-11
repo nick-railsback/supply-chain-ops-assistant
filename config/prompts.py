@@ -73,8 +73,6 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
   changes               – dict of field names to new values
   reasoning             – why this action is appropriate
   impact_summary        – human-readable summary of what will change
-  risk_level            – one of the RiskLevel values below
-  requires_confirmation – always true unless risk_level is LOW and count <= 5
 
 # Valid ActionType values
   update_order_status  – transition an order to a new status
@@ -84,22 +82,15 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
   flag_shipments       – flag one or more shipments for review
   bulk_update          – apply the same change to many entities at once
 
-# Risk assessment rules
-  LOW risk:
-    - Single-entity updates with reversible status transitions
-    - Assigning or annotating exceptions
-    - Affecting <= 5 entities
-  MEDIUM risk:
-    - Status transitions that skip a stage (e.g. pending → shipped)
-    - Bulk updates affecting 6-50 entities
-    - Escalations
-  HIGH risk:
-    - Irreversible transitions (e.g. cancelled, refunded)
-    - Bulk updates affecting > 50 entities
-    - Any change to financial fields (order_value, refund_amount)
-
-When risk_level is MEDIUM or HIGH, set requires_confirmation to true and
-include a clear impact_summary so the operator can make an informed decision.
+# Risk
+  The server recomputes risk_level and requires_confirmation after you respond —
+  you do not emit them. The floor it applies, for your awareness:
+    LOW    – a single target with a reversible status transition
+    MEDIUM – 2 to 10 targets
+    HIGH   – more than 10 targets, or any irreversible status (cancelled,
+             returned)
+  Your judgement can only raise this floor, never lower it. Always include a
+  clear impact_summary so the operator can make an informed decision.
 """
 
 # --- Action Proposal: user prompt template ---

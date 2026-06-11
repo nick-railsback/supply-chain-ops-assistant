@@ -73,8 +73,14 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
     ],
 }
 
-# Irreversible statuses that force HIGH risk
-_IRREVERSIBLE_STATUSES = {"cancelled", "returned", "refunded"}
+# Irreversible statuses that force HIGH risk.
+# cancelled: terminal OrderStatus (see validators.ORDER_STATUS_TRANSITIONS)
+# returned:  irreversible ShipmentStatus (models/tms.py)
+_IRREVERSIBLE_STATUSES = frozenset({"cancelled", "returned"})
+
+_MEDIUM_TARGET_MAX = 10  # <= this -> MEDIUM; above -> HIGH
+_AUTO_CONFIRM_TARGET_MAX = 5  # LOW risk above this still requires confirmation
+_RISK_ORDER = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
 
 
 # ===================================================================
@@ -100,7 +106,7 @@ def _assess_risk(
 
     if target_count <= 1:
         return RiskLevel.LOW
-    if target_count <= 10:
+    if target_count <= _MEDIUM_TARGET_MAX:
         return RiskLevel.MEDIUM
     return RiskLevel.HIGH
 
@@ -153,9 +159,13 @@ async def propose_action(
                 relevant_data=json.dumps(relevant_data, default=str),
             )
             schema = ActionProposal.model_json_schema()
-            # current_status is server-injected validator-only metadata; the
-            # model must never emit it.
-            schema.get("properties", {}).pop("current_status", None)
+            # Server-side fields: the model must never emit risk, its own
+            # confirmation gate, or the validator-only current_status metadata.
+            for server_side in ("current_status", "risk_level", "requires_confirmation"):
+                schema.get("properties", {}).pop(server_side, None)
+            # risk_level has no default, so it is in "required" — drop it there
+            # too or the API rejects the tool schema.
+            schema["required"] = [r for r in schema.get("required", []) if r != "risk_level"]
             data, usage = await structured_call(
                 system=PROPOSE_ACTION_SYSTEM,
                 user=prompt,
@@ -164,6 +174,17 @@ async def propose_action(
                 input_schema=schema,
             )
             logger.debug("propose_action usage=%s", usage)
+            # The model's risk claims are advisory: recompute server-side and
+            # let the claim raise risk/confirmation, never lower them (SEC-1).
+            claimed_risk = data.pop("risk_level", None)  # defensive: schema omits it
+            claimed_confirm = bool(data.pop("requires_confirmation", False))
+            target_count = len(data.get("target_ids", []))
+            computed = _assess_risk(target_count, data.get("changes", {}))
+            if claimed_risk in {r.value for r in RiskLevel}:
+                computed = max(computed, RiskLevel(claimed_risk), key=_RISK_ORDER.__getitem__)
+            data["risk_level"] = computed
+            confirm_floor = computed != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX
+            data["requires_confirmation"] = confirm_floor or claimed_confirm
             proposal = ActionProposal.model_validate(data)
             errors = await validate_action_proposal(proposal)
             if errors:
@@ -216,7 +237,7 @@ async def propose_action(
         reasoning=f"Action requested via: {user_query}",
         impact_summary=impact,
         risk_level=risk,
-        requires_confirmation=risk != RiskLevel.LOW or target_count > 5,
+        requires_confirmation=risk != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX,
         current_status=current_status,
     )
 
