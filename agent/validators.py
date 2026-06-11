@@ -80,6 +80,16 @@ DISPATCHABLE_OPERATORS: dict[tuple[str, str, str], frozenset[str]] = {
     ("tms", "shipment", "date_range_end"): frozenset({"lte"}),
 }
 
+# Boolean shortcut filters whose backends can only select the positive case
+# (there is no "orders NOT at risk" endpoint). A value other than True would
+# dispatch as "no filter at all", so it is rejected at validation.
+_TRUE_ONLY_BOOLEAN_FIELDS: frozenset[tuple[str, str, str]] = frozenset(
+    {
+        ("oms", "order", "at_risk"),
+        ("wms", "inventory", "below_reorder_point"),
+    }
+)
+
 # ---------------------------------------------------------------------------
 # Valid operators per field type
 # ---------------------------------------------------------------------------
@@ -175,6 +185,15 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
                         errors.append(
                             f"Operator '{f.operator}' on '{f.field}' is not executable; "
                             f"only {sorted(allowed)} is supported for this field."
+                        )
+                    elif (
+                        (system.value, entity, f.field) in _TRUE_ONLY_BOOLEAN_FIELDS
+                        and f.value is not True
+                    ):
+                        errors.append(
+                            f"Filter '{f.field} {f.operator} {f.value}' cannot be executed: "
+                            f"the backend only supports selecting '{f.field}' eq true. Drop "
+                            f"the filter to list everything, or query the positive case."
                         )
                 break
 

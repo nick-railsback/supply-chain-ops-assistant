@@ -167,6 +167,37 @@ class TestValidation:
         errors = await validate_query_plan(plan)
         assert errors == []
 
+    async def test_negated_boolean_filter_rejected(self, sample_query_plan):
+        """The backends can only select the positive (at-risk orders, low
+        stock); a value=False filter would execute as 'no filter at all' and
+        present the full list as the negated answer — reject it instead."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            primary_entity="order",
+            filters=[DataFilter(field="at_risk", operator="eq", value=False)],
+        )
+        errors = await validate_query_plan(plan)
+        assert len(errors) == 1
+        assert "at_risk" in errors[0]
+        assert "true" in errors[0].lower()
+
+    async def test_negated_low_stock_filter_rejected(self, sample_query_plan):
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.WMS],
+            primary_entity="inventory",
+            filters=[DataFilter(field="below_reorder_point", operator="eq", value=False)],
+        )
+        errors = await validate_query_plan(plan)
+        assert any("below_reorder_point" in e for e in errors)
+
+    async def test_positive_boolean_filter_still_valid(self, sample_query_plan):
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            primary_entity="order",
+            filters=[DataFilter(field="at_risk", operator="eq", value=True)],
+        )
+        assert await validate_query_plan(plan) == []
+
     async def test_plural_entity_spelling_resolves_to_orders(self, sample_query_plan):
         """The interpreter and fixtures spell the entity both 'order' and
         'orders'; the dispatcher treats anything that isn't 'exception' as

@@ -298,8 +298,11 @@ async def _dispatch_single_system(
     effective_limit = limit or 50
 
     if system == TargetSystem.OMS:
-        # Check for special at_risk filter
-        if _extract_filters(filters, "at_risk"):
+        # Check for special at_risk filter. `is True` (not truthiness): the
+        # endpoint can only select the positive case, and validation rejects
+        # any other value — this guards against an unvalidated plan slipping
+        # a falsy value through and executing as "no filter at all".
+        if _extract_filters(filters, "at_risk") is True:
             oms_risk = await client.get_at_risk_orders(limit=effective_limit)
             return [item.model_dump() for item in oms_risk.items], oms_risk.total
 
@@ -327,8 +330,8 @@ async def _dispatch_single_system(
         return [item.model_dump() for item in oms_orders.items], oms_orders.total
 
     elif system == TargetSystem.WMS:
-        # Check for low-stock shortcut
-        if _extract_filters(filters, "below_reorder_point"):
+        # Check for low-stock shortcut (`is True` for the same reason as at_risk)
+        if _extract_filters(filters, "below_reorder_point") is True:
             wms_low = await client.get_low_stock(limit=effective_limit)
             return [item.model_dump() for item in wms_low.items], wms_low.total
 
