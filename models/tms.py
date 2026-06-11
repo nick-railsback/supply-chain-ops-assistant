@@ -55,6 +55,7 @@ class Shipment(ApiModel):
     actual_delivery: datetime | None = None
     sla_target: datetime
     sla_status: SLAStatus
+    flagged: bool = False
 
 
 class TrackingEvent(ApiModel):

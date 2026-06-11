@@ -76,7 +76,7 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
 
 # Valid ActionType values
   update_order_status  – transition an order to a new status
-  update_exception     – change severity, status, or notes on an exception
+  update_exception     – change an exception's status or reassign it
   assign_exception     – assign an exception to a team member
   escalate_order       – escalate an order for priority handling
   flag_shipments       – flag one or more shipments for review

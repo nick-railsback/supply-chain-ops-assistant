@@ -25,6 +25,13 @@ class OrderStatus(StrEnum):
     EXCEPTION = "exception"
 
 
+class OrderPriority(StrEnum):
+    LOW = "low"
+    STANDARD = "standard"
+    HIGH = "high"
+    URGENT = "urgent"
+
+
 class OrderChannel(StrEnum):
     DTC_WEB = "dtc_web"
     DTC_MOBILE = "dtc_mobile"
@@ -74,6 +81,7 @@ class Order(ApiModel):
     customer_tier: CustomerTier
     status: OrderStatus
     channel: OrderChannel
+    priority: OrderPriority = OrderPriority.STANDARD
     created_at: datetime
     updated_at: datetime | None = None
     promised_delivery_date: datetime | None = None

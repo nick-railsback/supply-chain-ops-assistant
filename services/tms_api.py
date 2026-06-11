@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import Float, ForeignKey, String, func, select
+from pydantic import BaseModel, ConfigDict
+from sqlalchemy import Boolean, Float, ForeignKey, String, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
@@ -57,6 +57,9 @@ class ShipmentORM(Base):
     actual_delivery: Mapped[str | None] = mapped_column(String, nullable=True)
     sla_target: Mapped[str] = mapped_column(String)
     sla_status: Mapped[str] = mapped_column(String)
+    flagged: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
 
     tracking_events: Mapped[list[TrackingEventORM]] = relationship(
         back_populates="shipment", lazy="selectin"
@@ -95,10 +98,13 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 
 
 class ShipmentPatch(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     status: ShipmentStatus | None = None
     sla_status: SLAStatus | None = None
     actual_delivery: datetime | None = None
     estimated_delivery: datetime | None = None
+    flagged: bool | None = None
 
 
 # ---------------------------------------------------------------------------

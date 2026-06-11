@@ -109,6 +109,7 @@ def _map_orders(
                 "customer_tier": o["customer_tier"],
                 "status": o["status"],
                 "channel": o["channel"],
+                "priority": "standard",
                 "created_at": o["created_at"],
                 "updated_at": o["updated_at"],
                 "promised_delivery_date": o.get("promised_delivery_date"),
@@ -230,6 +231,7 @@ def _map_shipments(shipments: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "actual_delivery": None,
             "sla_target": s["estimated_delivery"],
             "sla_status": s["sla_status"],
+            "flagged": False,
         }
         for s in shipments
     ]
