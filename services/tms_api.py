@@ -17,7 +17,6 @@ from models.tms import (
     ShipmentPatch,
     ShipmentWithTracking,
     SLASummary,
-    TrackingEvent,
 )
 from services.common import apply_filters, build_paginated_response, create_app
 
@@ -187,9 +186,7 @@ async def get_shipment(
     if shipment is None:
         raise HTTPException(status_code=404, detail=f"Shipment {shipment_id} not found")
 
-    shipment_data = Shipment.model_validate(shipment)
-    events = [TrackingEvent.model_validate(e) for e in shipment.tracking_events]
-    return ShipmentWithTracking(**shipment_data.model_dump(), tracking_events=events)
+    return ShipmentWithTracking.model_validate(shipment)
 
 
 @app.get("/stats/carrier-performance", response_model=list[CarrierStats])

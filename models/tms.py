@@ -46,8 +46,10 @@ class Shipment(ApiModel):
     status: ShipmentStatus
     tracking_number: str
     origin_center_id: str
-    destination_zip: str
-    destination_state: str
+    # Nullable to match the ORM columns: rows seeded before these fields were
+    # populated hold NULL, and reading them must not fail response validation.
+    destination_zip: str | None = None
+    destination_state: str | None = None
     weight_lbs: float
     shipping_cost: float
     label_created_at: datetime

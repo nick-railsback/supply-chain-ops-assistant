@@ -84,6 +84,44 @@ class TestTMSShipments:
         resp = await tms_client.get("/shipments/SHP-NONEXISTENT")
         assert resp.status_code == 404
 
+    async def test_get_shipment_with_null_destination_returns_200(self, tms_app, tms_client):
+        """The destination columns are nullable and rows seeded before they
+        were populated hold NULL; reading such a row must serve the shipment,
+        not 500 on response validation."""
+        from services.tms_api import ShipmentORM, get_session
+
+        gen = tms_app.dependency_overrides[get_session]()
+        session = await anext(gen)
+        session.add(
+            ShipmentORM(
+                shipment_id="SHP-20250306-00006",
+                order_id="ORD-2025-006",
+                carrier="FedEx",
+                service_level="ground",
+                status="in_transit",
+                tracking_number="FX0000000000",
+                origin_center_id="FC-EAST",
+                destination_zip=None,
+                destination_state=None,
+                weight_lbs=1.0,
+                shipping_cost=5.00,
+                label_created_at="2025-03-06T10:00:00",
+                estimated_delivery="2025-03-09T18:00:00",
+                actual_delivery=None,
+                sla_target="2025-03-10T18:00:00",
+                sla_status="on_track",
+            )
+        )
+        await session.commit()
+        await gen.aclose()
+
+        resp = await tms_client.get("/shipments/SHP-20250306-00006")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["destination_zip"] is None
+        assert data["destination_state"] is None
+        assert data["tracking_events"] == []
+
 
 class TestTMSPatchShipment:
     async def test_patch_shipment_valid(self, tms_client):
