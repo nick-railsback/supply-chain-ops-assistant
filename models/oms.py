@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 
-from models.shared import ApiModel, Severity
+from models.shared import ApiModel, Severity, StrictPatch
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -131,3 +131,20 @@ class DailyStats(ApiModel):
     total_value: float
     exception_rate: float
     orders_by_status: dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# Patch request models (the OMS PATCH contracts; agent.validators derives the
+# allowed change fields per action from these)
+# ---------------------------------------------------------------------------
+
+
+class OrderPatch(StrictPatch):
+    status: OrderStatus | None = None
+    notes: str | None = None
+    priority: OrderPriority | None = None
+
+
+class ExceptionPatch(StrictPatch):
+    status: ExceptionStatus | None = None
+    assigned_to: str | None = None

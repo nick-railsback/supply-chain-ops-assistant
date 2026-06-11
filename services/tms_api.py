@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Boolean, Float, ForeignKey, String, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
@@ -16,9 +14,8 @@ from models.shared import PaginatedResponse
 from models.tms import (
     CarrierStats,
     Shipment,
-    ShipmentStatus,
+    ShipmentPatch,
     ShipmentWithTracking,
-    SLAStatus,
     SLASummary,
     TrackingEvent,
 )
@@ -90,21 +87,6 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
-
-
-# ---------------------------------------------------------------------------
-# Patch request models
-# ---------------------------------------------------------------------------
-
-
-class ShipmentPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: ShipmentStatus | None = None
-    sla_status: SLAStatus | None = None
-    actual_delivery: datetime | None = None
-    estimated_delivery: datetime | None = None
-    flagged: bool | None = None
 
 
 # ---------------------------------------------------------------------------

@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from models.shared import ApiModel
+from models.shared import ApiModel, StrictPatch
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -95,3 +95,17 @@ class SLASummary(ApiModel):
     met: int
     compliance_rate: float
     by_carrier: dict[str, dict[str, int]]
+
+
+# ---------------------------------------------------------------------------
+# Patch request models (the TMS PATCH contract; agent.validators derives the
+# allowed change fields per action from this)
+# ---------------------------------------------------------------------------
+
+
+class ShipmentPatch(StrictPatch):
+    status: ShipmentStatus | None = None
+    sla_status: SLAStatus | None = None
+    actual_delivery: datetime | None = None
+    estimated_delivery: datetime | None = None
+    flagged: bool | None = None

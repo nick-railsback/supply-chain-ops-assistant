@@ -187,9 +187,10 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
                             f"only {sorted(allowed)} is supported for this field."
                         )
                     elif (
-                        (system.value, entity, f.field) in _TRUE_ONLY_BOOLEAN_FIELDS
-                        and f.value is not True
-                    ):
+                        system.value,
+                        entity,
+                        f.field,
+                    ) in _TRUE_ONLY_BOOLEAN_FIELDS and f.value is not True:
                         errors.append(
                             f"Filter '{f.field} {f.operator} {f.value}' cannot be executed: "
                             f"the backend only supports selecting '{f.field}' eq true. Drop "

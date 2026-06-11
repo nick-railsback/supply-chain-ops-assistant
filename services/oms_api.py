@@ -7,20 +7,19 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Float, ForeignKey, Integer, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from models.oms import (
     DailyStats,
+    ExceptionPatch,
     ExceptionStatus,
     ExceptionSummary,
     LineItem,
     Order,
     OrderException,
-    OrderPriority,
-    OrderStatus,
+    OrderPatch,
     OrderWithLineItems,
 )
 from models.shared import PaginatedResponse
@@ -110,26 +109,6 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
-
-
-# ---------------------------------------------------------------------------
-# Patch request models
-# ---------------------------------------------------------------------------
-
-
-class OrderPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: OrderStatus | None = None
-    notes: str | None = None
-    priority: OrderPriority | None = None
-
-
-class ExceptionPatch(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: ExceptionStatus | None = None
-    assigned_to: str | None = None
 
 
 # ---------------------------------------------------------------------------
