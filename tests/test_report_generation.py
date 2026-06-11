@@ -3,14 +3,18 @@
 from datetime import UTC, date, datetime
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 from agent.report_generator import (
     ReportBuilder,
+    ReportDataUnavailable,
     _build_carrier_performance_report,
     _build_center_health_report,
     _build_daily_volume_trend_report,
     _build_exception_summary_report,
     _build_sla_compliance_report,
     _enrich_with_llm,
+    collect_report_data,
     generate_report,
 )
 from config.settings import get_settings
@@ -309,6 +313,42 @@ class TestGenerateReport:
         report = await generate_report(client, "give me a random thing")
         assert isinstance(report, ReportOutput)
         assert report.report_type == "exception_summary"
+
+
+class TestReportDataUnavailable:
+    """One dead backend surfaces as a typed, per-system diagnosis instead of a
+    bare exception escaping process_query as a generic error."""
+
+    async def test_collect_maps_failure_to_system(self):
+        client = AsyncMock()
+        client.get_sla_summary = AsyncMock(side_effect=RuntimeError("connect timeout"))
+        client.get_sla_breaches = AsyncMock(return_value=_mock_sla_breaches())
+        client.get_carrier_performance = AsyncMock(return_value=_mock_carrier_stats())
+
+        with pytest.raises(ReportDataUnavailable) as exc_info:
+            await collect_report_data(client, "sla_compliance")
+
+        assert exc_info.value.error_details == {"tms": "connect timeout"}
+
+    async def test_generate_report_propagates_typed_error(self):
+        client = AsyncMock()
+        client.get_exception_summary = AsyncMock(side_effect=RuntimeError("boom"))
+        client.list_exceptions = AsyncMock(return_value=_mock_open_exceptions())
+        client.get_daily_stats = AsyncMock(return_value=_mock_daily_stats())
+
+        with pytest.raises(ReportDataUnavailable) as exc_info:
+            await generate_report(client, "show me exception summary report")
+
+        assert "oms" in exc_info.value.error_details
+
+    async def test_all_systems_up_unchanged(self):
+        client = AsyncMock()
+        client.get_sla_summary = AsyncMock(return_value=_mock_sla_summary())
+        client.get_sla_breaches = AsyncMock(return_value=_mock_sla_breaches())
+        client.get_carrier_performance = AsyncMock(return_value=_mock_carrier_stats())
+
+        data = await collect_report_data(client, "sla_compliance")
+        assert set(data) == {"sla_summary", "sla_breaches", "carrier_performance"}
 
 
 class TestEnrichReportLLM:

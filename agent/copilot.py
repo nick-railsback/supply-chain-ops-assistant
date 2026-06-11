@@ -32,6 +32,17 @@ logger = logging.getLogger(__name__)
 _MAX_HISTORY = 5
 
 
+def _name_failed_systems(error_details: dict[str, str]) -> str:
+    """Render per-system failures for a human: 'TMS did not respond (boom).'"""
+    return (
+        "; ".join(
+            f"{system.upper()} did not respond ({err})"
+            for system, err in sorted(error_details.items())
+        )
+        + "."
+    )
+
+
 def _envelope(
     status: str,
     plan: QueryPlan,
@@ -162,9 +173,14 @@ class Copilot:
 
         # 5. Intent dispatch
         if plan.intent is UserIntent.REPORT:
-            from agent.report_generator import generate_report
+            from agent.report_generator import ReportDataUnavailable, generate_report
 
-            report = await generate_report(self.client, user_query)
+            try:
+                report = await generate_report(self.client, user_query)
+            except ReportDataUnavailable as exc:
+                msg = "Report unavailable: " + _name_failed_systems(exc.error_details)
+                self._update_history("assistant", msg)
+                return _envelope("error", plan, decision, msg, errors=[msg])
             self._update_history("assistant", f"generated report: {report.title}")
             return _envelope(
                 "report",
@@ -178,6 +194,24 @@ class Copilot:
             from agent.action_handler import propose_action
 
             context = await execute_query(self.client, plan)  # rows the action targets
+            if context.partial_failure:
+                # Never propose a mutation from silently incomplete data: a
+                # proposal over the surviving subset reads as covering
+                # everything the operator asked about.
+                msg = (
+                    "Cannot propose an action on incomplete data: "
+                    + _name_failed_systems(context.error_details or {})
+                    + " Re-run when all systems are reachable."
+                )
+                self._update_history("assistant", msg)
+                return _envelope(
+                    "error",
+                    plan,
+                    decision,
+                    msg,
+                    data=context.model_dump(),
+                    errors=[msg],
+                )
             try:
                 proposal = await propose_action(self.client, user_query, context.data)
             except ValueError as exc:

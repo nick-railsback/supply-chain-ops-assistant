@@ -49,6 +49,68 @@ async def test_process_query_reports_partial_status():
     assert "tms" in result["message"]
 
 
+async def test_action_request_refuses_partial_context():
+    """A mutation must never be proposed from silently incomplete data: with
+    one backend down, the action path refuses and names the dead system
+    instead of proposing against the surviving subset."""
+    partial = QueryResult(
+        data=[{"order_id": "ORD-2025-001", "status": "pending"}],
+        total_count=1,
+        systems_queried=[TargetSystem.OMS, TargetSystem.TMS],
+        partial_failure=True,
+        error_details={"tms": "Service tms unavailable: boom"},
+    )
+    plan = QueryPlan(
+        intent=UserIntent.ACTION_REQUEST,
+        target_systems=[TargetSystem.OMS, TargetSystem.TMS],
+        primary_entity="order",
+        filters=[],
+        confidence=0.95,
+        reasoning="flag breached shipments",
+    )
+    propose = AsyncMock()
+    copilot = Copilot()
+    with (
+        patch("agent.copilot.interpret_query", AsyncMock(return_value=plan)),
+        patch("agent.copilot.execute_query", AsyncMock(return_value=partial)),
+        patch("agent.action_handler.propose_action", propose),
+    ):
+        result = await copilot.process_query("flag all breached shipments")
+
+    assert result["status"] == "error"
+    assert "TMS" in result["message"]
+    assert result["proposal"] is None
+    propose.assert_not_called()
+
+
+async def test_report_with_dead_backend_returns_error_envelope():
+    """A report over a dead backend produces a per-system error message, not
+    an exception escaping process_query as a generic 'Error: ...'."""
+    from agent.report_generator import ReportDataUnavailable
+
+    plan = QueryPlan(
+        intent=UserIntent.REPORT,
+        target_systems=[TargetSystem.TMS],
+        primary_entity="shipment",
+        filters=[],
+        confidence=0.9,
+        reasoning="sla report",
+    )
+    copilot = Copilot()
+    with (
+        patch("agent.copilot.interpret_query", AsyncMock(return_value=plan)),
+        patch(
+            "agent.report_generator.generate_report",
+            AsyncMock(side_effect=ReportDataUnavailable({"tms": "connect timeout"})),
+        ),
+    ):
+        result = await copilot.process_query("sla compliance report")
+
+    assert result["status"] == "error"
+    assert "TMS" in result["message"]
+    assert "connect timeout" in result["message"]
+
+
 class _FakeCopilot:
     def __init__(self, envelope: dict) -> None:
         self._envelope = envelope

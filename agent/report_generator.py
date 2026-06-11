@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections.abc import Coroutine
 from datetime import UTC, datetime
 from typing import Any
 
@@ -78,60 +79,75 @@ def _detect_report_type(request: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+class ReportDataUnavailable(RuntimeError):
+    """Raised when a backend a report needs cannot be reached.
+
+    ``error_details`` maps system name -> error string — the same shape as
+    ``QueryResult.error_details`` on the read path, so callers can diagnose
+    per system instead of catching a bare exception.
+    """
+
+    def __init__(self, error_details: dict[str, str]) -> None:
+        self.error_details = error_details
+        failed = "; ".join(f"{s}: {e}" for s, e in sorted(error_details.items()))
+        super().__init__(f"Report data unavailable — {failed}")
+
+
+async def _gather_named(*tasks: tuple[str, str, Coroutine[Any, Any, Any]]) -> dict[str, Any]:
+    """Gather ``(payload_key, system, coroutine)`` tasks concurrently.
+
+    Every report builder indexes its payload keys unconditionally, so a
+    partial payload is useless — any failure raises ``ReportDataUnavailable``
+    carrying every failed system, after all tasks have settled.
+    """
+    results = await asyncio.gather(*(coro for _, _, coro in tasks), return_exceptions=True)
+    payload: dict[str, Any] = {}
+    errors: dict[str, str] = {}
+    for (key, system, _), result in zip(tasks, results, strict=True):
+        if isinstance(result, BaseException):
+            errors[system] = str(result)
+        else:
+            payload[key] = result
+    if errors:
+        raise ReportDataUnavailable(errors)
+    return payload
+
+
 async def collect_report_data(client: OpsClient, report_type: str) -> dict[str, Any]:
     """Collect data from APIs based on the requested report type.
 
     Returns a dict with the relevant data payloads for report building.
+    Raises ``ReportDataUnavailable`` when any required backend is down.
     """
     if report_type == "exception_summary":
-        summary, open_exceptions, daily_stats = await asyncio.gather(
-            client.get_exception_summary(),
-            client.list_exceptions(status="open"),
-            client.get_daily_stats(days=7),
+        return await _gather_named(
+            ("summary", "oms", client.get_exception_summary()),
+            ("open_exceptions", "oms", client.list_exceptions(status="open")),
+            ("daily_stats", "oms", client.get_daily_stats(days=7)),
         )
-        return {
-            "summary": summary,
-            "open_exceptions": open_exceptions,
-            "daily_stats": daily_stats,
-        }
 
     if report_type == "sla_compliance":
-        sla_summary, sla_breaches, carrier_perf = await asyncio.gather(
-            client.get_sla_summary(),
-            client.get_sla_breaches(),
-            client.get_carrier_performance(),
+        return await _gather_named(
+            ("sla_summary", "tms", client.get_sla_summary()),
+            ("sla_breaches", "tms", client.get_sla_breaches()),
+            ("carrier_performance", "tms", client.get_carrier_performance()),
         )
-        return {
-            "sla_summary": sla_summary,
-            "sla_breaches": sla_breaches,
-            "carrier_performance": carrier_perf,
-        }
 
     if report_type == "center_health":
-        centers, utilization, low_stock = await asyncio.gather(
-            client.list_centers(),
-            client.get_utilization(),
-            client.get_low_stock(),
+        return await _gather_named(
+            ("centers", "wms", client.list_centers()),
+            ("utilization", "wms", client.get_utilization()),
+            ("low_stock", "wms", client.get_low_stock()),
         )
-        return {
-            "centers": centers,
-            "utilization": utilization,
-            "low_stock": low_stock,
-        }
 
     if report_type == "daily_volume_trend":
-        daily_stats = await client.get_daily_stats(days=14)
-        return {"daily_stats": daily_stats}
+        return await _gather_named(("daily_stats", "oms", client.get_daily_stats(days=14)))
 
     if report_type == "carrier_performance":
-        carrier_stats, recent_shipments = await asyncio.gather(
-            client.get_carrier_performance(),
-            client.list_shipments(limit=50),
+        return await _gather_named(
+            ("carrier_stats", "tms", client.get_carrier_performance()),
+            ("recent_shipments", "tms", client.list_shipments(limit=50)),
         )
-        return {
-            "carrier_stats": carrier_stats,
-            "recent_shipments": recent_shipments,
-        }
 
     # Fallback: treat unknown types as exception_summary
     return await collect_report_data(client, "exception_summary")
