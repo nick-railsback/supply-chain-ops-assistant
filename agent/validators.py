@@ -206,19 +206,26 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
             f"exceeding the cap of {settings.bulk_update_cap}."
         )
 
-    # Status transition validation for order status updates
+    # Status transition validation for order status updates: every target is
+    # checked against its own context status — a target absent from the queried
+    # context is rejected rather than borrowing another row's status.
     if proposal.action_type == ActionType.UPDATE_ORDER_STATUS:
         new_status = proposal.changes.get("status")
-        current_status = proposal.current_status
-
-        if new_status and current_status:
-            allowed = ORDER_STATUS_TRANSITIONS.get(current_status, [])
-            if new_status not in allowed:
-                errors.append(
-                    f"Invalid status transition: '{current_status}' -> '{new_status}'. "
-                    f"Allowed transitions: {allowed}"
-                )
-        elif new_status and not current_status:
-            errors.append("Status update requires current_status to validate the transition.")
+        if new_status:
+            statuses = proposal.current_statuses or {}
+            for target_id in proposal.target_ids:
+                current = statuses.get(target_id)
+                if current is None:
+                    errors.append(
+                        f"Target '{target_id}' was not found in the queried context; "
+                        f"cannot validate its current status for the transition."
+                    )
+                    continue
+                allowed = ORDER_STATUS_TRANSITIONS.get(current, [])
+                if new_status not in allowed:
+                    errors.append(
+                        f"Invalid status transition for '{target_id}': "
+                        f"'{current}' -> '{new_status}'. Allowed transitions: {allowed}"
+                    )
 
     return errors

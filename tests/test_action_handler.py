@@ -129,8 +129,8 @@ class TestProposeActionStatusUpdate:
         }
         proposal = await propose_action(None, "update order status to processing", [row])
 
-        assert proposal.current_status == "pending"
-        assert "current_status" not in proposal.changes
+        assert proposal.current_statuses == {"ORD-2025-001": "pending"}
+        assert "current_statuses" not in proposal.changes
         assert await validate_action_proposal(proposal) == []
 
     async def test_current_status_not_dispatched_or_rendered(self, monkeypatch):
@@ -147,6 +147,7 @@ class TestProposeActionStatusUpdate:
 
         assert proposal.changes == {"status": "processing"}
         assert "current_status" not in format_proposal_summary(proposal)
+        assert "pending" not in format_proposal_summary(proposal)
 
     async def test_shipped_to_delivered_is_valid(self, monkeypatch):
         """The corrected transition map allows the real shipped -> delivered move
@@ -160,7 +161,7 @@ class TestProposeActionStatusUpdate:
         }
         proposal = await propose_action(None, "update order status to delivered", [row])
 
-        assert proposal.current_status == "shipped"
+        assert proposal.current_statuses == {"ORD-2025-002": "shipped"}
         assert await validate_action_proposal(proposal) == []
 
     async def test_invalid_transition_fails_on_transition_rule(self, monkeypatch):
@@ -468,7 +469,71 @@ class TestProposeActionLLMCurrentStatus:
                 None, "update order status to processing", relevant_data
             )
 
-        assert proposal.current_status == "pending"
+        assert proposal.current_statuses == {"ORD-2025-001": "pending"}
+        assert await validate_action_proposal(proposal) == []
+
+    async def test_llm_path_resolves_join_prefixed_rows(self, monkeypatch):
+        """Join-correlated context rows carry status as ``oms_status``; the
+        status map must read both spellings instead of failing the match."""
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "update_order_status",
+            "target_ids": ["ORD-2025-001"],
+            "changes": {"status": "processing"},
+            "reasoning": "advance order",
+            "impact_summary": "1 order",
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        relevant_data = [{"order_id": "ORD-2025-001", "oms_status": "pending"}]
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(
+                None, "update order status to processing", relevant_data
+            )
+
+        assert proposal.current_statuses == {"ORD-2025-001": "pending"}
+        assert await validate_action_proposal(proposal) == []
+
+
+class TestValidateProposalPerTarget:
+    """Status transitions are validated per target against the queried
+    context: no target ever borrows another row's status, and targets absent
+    from context are rejected outright."""
+
+    def _proposal(self, target_ids, current_statuses):
+        return ActionProposal(
+            action_type=ActionType.UPDATE_ORDER_STATUS,
+            target_ids=target_ids,
+            changes={"status": "processing"},
+            reasoning="advance orders",
+            impact_summary=f"{len(target_ids)} orders",
+            risk_level=RiskLevel.MEDIUM,
+            current_statuses=current_statuses,
+        )
+
+    async def test_target_missing_from_context_is_rejected(self):
+        """A hallucinated/out-of-context target id must not validate against
+        another row's status."""
+        proposal = self._proposal(["ORD-2025-0999"], {"ORD-2025-001": "pending"})
+        errors = await validate_action_proposal(proposal)
+        assert any("ORD-2025-0999" in e and "context" in e for e in errors)
+
+    async def test_each_target_validated_against_its_own_status(self):
+        """A terminal-state target is rejected even when a sibling target's
+        transition is valid."""
+        proposal = self._proposal(
+            ["ORD-2025-001", "ORD-2025-002"],
+            {"ORD-2025-001": "pending", "ORD-2025-002": "delivered"},
+        )
+        errors = await validate_action_proposal(proposal)
+        assert len(errors) == 1
+        assert "ORD-2025-002" in errors[0]
+        assert "delivered" in errors[0]
+
+    async def test_all_valid_targets_pass(self):
+        proposal = self._proposal(
+            ["ORD-2025-001", "ORD-2025-002"],
+            {"ORD-2025-001": "pending", "ORD-2025-002": "exception"},
+        )
         assert await validate_action_proposal(proposal) == []
 
     async def test_llm_path_invalid_transition_falls_back(self, monkeypatch):

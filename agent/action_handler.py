@@ -153,6 +153,24 @@ def _apply_risk_floor(
     return risk, confirm or claimed_confirm
 
 
+def _status_by_target(relevant_data: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each context row's entity id to its current status.
+
+    The single contract both proposal paths use to ground transition
+    validation in the queried context. Join-correlated rows prefix non-key
+    fields with the system (``oms_status``), so both spellings are read; rows
+    without an id or status are skipped — the validator then rejects any
+    target it can't find here rather than borrowing another row's status.
+    """
+    statuses: dict[str, str] = {}
+    for row in relevant_data:
+        entity_id = row.get("order_id") or row.get("id")
+        status = row.get("status") or row.get("oms_status")
+        if entity_id and status:
+            statuses[str(entity_id)] = str(status)
+    return statuses
+
+
 # ===================================================================
 # Keyword-based action type detection
 # ===================================================================
@@ -203,8 +221,8 @@ async def propose_action(
             schema = ActionProposal.model_json_schema()
             # The model grades its own risk_level / requires_confirmation —
             # merged below with the server floor, raise-only. The validator-only
-            # current_status ground truth must never come from the model.
-            schema.get("properties", {}).pop("current_status", None)
+            # current_statuses ground truth must never come from the model.
+            schema.get("properties", {}).pop("current_statuses", None)
             data, usage = await structured_call(
                 system=PROPOSE_ACTION_SYSTEM_PROMPT,
                 user=prompt,
@@ -228,20 +246,18 @@ async def propose_action(
                 claimed_risk,
                 claimed_confirm,
             )
-            # Mirror the rule path: the transition validator needs the order's
+            # Mirror the rule path: the transition validator needs each target's
             # current status, which the model must never supply itself.
-            data.pop("current_status", None)
-            if (
-                data.get("action_type") == ActionType.UPDATE_ORDER_STATUS.value
-                and data.get("changes", {}).get("status")
-                and relevant_data
-            ):
-                wanted_ids = set(map(str, data.get("target_ids", [])))
-                row = next(
-                    (r for r in relevant_data if str(r.get("order_id", "")) in wanted_ids),
-                    relevant_data[0],
-                )
-                data["current_status"] = row.get("status")
+            data.pop("current_statuses", None)
+            if data.get("action_type") == ActionType.UPDATE_ORDER_STATUS.value and data.get(
+                "changes", {}
+            ).get("status"):
+                statuses = _status_by_target(relevant_data)
+                data["current_statuses"] = {
+                    tid: statuses[tid]
+                    for tid in map(str, data.get("target_ids", []))
+                    if tid in statuses
+                }
             proposal = ActionProposal.model_validate(data)
             errors = await validate_action_proposal(proposal)
             if errors:
@@ -268,13 +284,14 @@ async def propose_action(
     if relevant_data:
         changes = relevant_data[0].get("changes", {})
 
-    # Status updates need the order's current status to validate the transition.
-    # Capture it as validator-only metadata (ActionProposal.current_status) from
-    # the target row — never into `changes`, so it can't leak onto the wire, into
-    # the impact summary, or into the human-facing proposal summary.
-    current_status: str | None = None
-    if action_type == ActionType.UPDATE_ORDER_STATUS and changes.get("status") and relevant_data:
-        current_status = relevant_data[0].get("status")
+    # Status updates need each target's current status to validate transitions.
+    # Capture them as validator-only metadata (ActionProposal.current_statuses)
+    # from the context rows — never into `changes`, so they can't leak onto the
+    # wire, into the impact summary, or into the human-facing proposal summary.
+    current_statuses: dict[str, str] | None = None
+    if action_type == ActionType.UPDATE_ORDER_STATUS and changes.get("status"):
+        statuses = _status_by_target(relevant_data)
+        current_statuses = {tid: statuses[tid] for tid in target_ids if tid in statuses}
 
     target_count = len(target_ids)
     risk, requires_confirmation = _apply_risk_floor(action_type, target_ids, changes)
@@ -295,7 +312,7 @@ async def propose_action(
         impact_summary=impact,
         risk_level=risk,
         requires_confirmation=requires_confirmation,
-        current_status=current_status,
+        current_statuses=current_statuses,
     )
 
     errors = await validate_action_proposal(proposal)
