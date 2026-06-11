@@ -46,6 +46,11 @@ jobs:
       - name: Tests
         run: uv run pytest -m "not llm"
 
+      # Gate on the offline rule arm so interpreter regressions fail the build.
+      # Thresholds sit a couple of points below the measured 52%/55% baseline.
+      - name: Interpreter eval (rule arm, thresholded)
+        run: uv run python -m evals.run_eval --arm rule --min-intent-accuracy 0.50 --min-systems-accuracy 0.52
+
   supply-chain:
     name: OSV vulnerability scan
     runs-on: ubuntu-latest

@@ -1,6 +1,9 @@
 """Tests for rule-based query interpreter (Story 15.6)."""
 
+from unittest.mock import AsyncMock, patch
+
 from agent.query_interpreter import _rule_based_interpret, interpret_query
+from config.settings import get_settings
 from models.shared import TargetSystem, UserIntent
 
 # ---------------------------------------------------------------------------
@@ -111,3 +114,22 @@ class TestInterpretQuery:
         plan = await interpret_query("xyzzy plugh foo bar", [])
         assert plan.intent == UserIntent.CLARIFICATION_NEEDED
         assert plan.confidence < 0.5
+
+    async def test_interpret_query_rule_based_when_llm_disabled(self, monkeypatch):
+        """LLM off -> the typed rule interpreter runs, tagged rule_based."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)
+        plan = await interpret_query("show all orders", [])
+        assert plan.interpretation_source == "rule_based"
+        assert TargetSystem.OMS in plan.target_systems
+
+    async def test_interpret_query_fallback_when_llm_errors(self, monkeypatch):
+        """A configured key but a failing LLM call degrades to the rule path,
+        tagged fallback (never a silent degrade)."""
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        with patch(
+            "agent.query_interpreter.structured_call",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            plan = await interpret_query("show all orders", [])
+        assert plan.interpretation_source == "fallback"
+        assert TargetSystem.OMS in plan.target_systems
