@@ -137,9 +137,7 @@ class TestValidation:
         errors = await validate_action_proposal(proposal)
         assert any("carrier" in e for e in errors)
 
-    async def test_bulk_update_validates_changes_per_target_entity(
-        self, sample_action_proposal
-    ):
+    async def test_bulk_update_validates_changes_per_target_entity(self, sample_action_proposal):
         """notes is patchable on orders but not shipments; a bulk update over
         both entities is rejected for the entity that can't express it."""
         proposal = sample_action_proposal(
