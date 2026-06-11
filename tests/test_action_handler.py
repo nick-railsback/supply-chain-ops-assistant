@@ -46,6 +46,16 @@ class TestAssessRisk:
         result = _assess_risk(1, {"status": "returned"})
         assert result == RiskLevel.HIGH
 
+    def test_assess_risk_escalation_floor(self):
+        """Single-target escalations are graded at least MEDIUM."""
+        result = _assess_risk(1, {}, ActionType.ESCALATE_ORDER)
+        assert result == RiskLevel.MEDIUM
+
+    def test_assess_risk_financial_field(self):
+        """Any change touching a financial field forces HIGH regardless of count."""
+        result = _assess_risk(1, {"order_value": 99999})
+        assert result == RiskLevel.HIGH
+
 
 # ---------------------------------------------------------------------------
 # _detect_action_type tests
@@ -278,9 +288,32 @@ class TestProposeActionRiskFloor:
         assert proposal.risk_level == RiskLevel.LOW
         assert proposal.requires_confirmation is False
 
-    async def test_schema_omits_server_side_fields(self, monkeypatch):
-        # Capture the input_schema kwarg; risk_level / requires_confirmation /
-        # current_status must be absent from properties AND from "required".
+    async def test_escalation_cannot_auto_execute_via_llm_path(self, monkeypatch):
+        # 1 target, model claims low/no-confirm -> server floor grades the
+        # escalation MEDIUM, so confirmation is required regardless.
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "escalate_order",
+            "target_ids": ["ORD-2025-001"],
+            "changes": {},
+            "reasoning": "expedite the order",
+            "impact_summary": "1 order",
+            "risk_level": "low",
+            "requires_confirmation": False,
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(
+                None, "escalate order ORD-2025-001", [{"order_id": "ORD-2025-001"}]
+            )
+
+        assert proposal.risk_level == RiskLevel.MEDIUM
+        assert proposal.requires_confirmation is True
+
+    async def test_schema_keeps_risk_fields_strips_current_status(self, monkeypatch):
+        # The model grades its own risk (merged raise-only server-side), so
+        # risk_level stays in the schema and stays required; the validator-only
+        # current_status ground truth must never enter the schema.
         monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
         tool_input = {
             "action_type": "assign_exception",
@@ -295,9 +328,51 @@ class TestProposeActionRiskFloor:
 
         schema = call.await_args.kwargs["input_schema"]
         properties = schema.get("properties", {})
-        for field in ("risk_level", "requires_confirmation", "current_status"):
-            assert field not in properties, field
-        assert "risk_level" not in schema.get("required", [])
+        assert "risk_level" in properties
+        assert "requires_confirmation" in properties
+        assert "current_status" not in properties
+        assert "risk_level" in schema.get("required", [])
+
+
+class TestProposeActionPrompt:
+    """The proposal system prompt is composed at import time from the risk
+    constants, so the rules the model reads can't drift from the rules the
+    server enforces."""
+
+    def test_prompt_composed_from_risk_constants(self):
+        from agent.action_handler import (
+            _AUTO_CONFIRM_TARGET_MAX,
+            _FINANCIAL_FIELDS,
+            _IRREVERSIBLE_STATUSES,
+            _MEDIUM_TARGET_MAX,
+            PROPOSE_ACTION_SYSTEM_PROMPT,
+        )
+
+        assert str(_MEDIUM_TARGET_MAX) in PROPOSE_ACTION_SYSTEM_PROMPT
+        assert str(_AUTO_CONFIRM_TARGET_MAX) in PROPOSE_ACTION_SYSTEM_PROMPT
+        for status in _IRREVERSIBLE_STATUSES:
+            assert status in PROPOSE_ACTION_SYSTEM_PROMPT
+        for field in _FINANCIAL_FIELDS:
+            assert field in PROPOSE_ACTION_SYSTEM_PROMPT
+        # No unformatted placeholders survive composition.
+        assert "{medium_target_max}" not in PROPOSE_ACTION_SYSTEM_PROMPT
+
+    async def test_llm_call_uses_composed_prompt(self, monkeypatch):
+        from agent.action_handler import PROPOSE_ACTION_SYSTEM_PROMPT
+
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "assign_exception",
+            "target_ids": ["EXC-0001"],
+            "changes": {"assigned_to": "Sarah Chen"},
+            "reasoning": "single assign",
+            "impact_summary": "1 exception",
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        with patch("agent.action_handler.structured_call", call):
+            await propose_action(None, "assign exception", [{}])
+
+        assert call.await_args.kwargs["system"] == PROPOSE_ACTION_SYSTEM_PROMPT
 
 
 class TestProposeActionLLMCurrentStatus:

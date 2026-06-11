@@ -14,7 +14,7 @@ from typing import Any
 
 from agent.llm import LLMUnavailable, structured_call
 from agent.validators import validate_action_proposal
-from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER  # noqa: F401
+from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER
 from models.action import ActionProposal, ActionResult, ActionType
 from models.shared import RiskLevel
 from services.client import OpsClient
@@ -78,9 +78,22 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
 # returned:  irreversible ShipmentStatus (models/tms.py)
 _IRREVERSIBLE_STATUSES = frozenset({"cancelled", "returned"})
 
+# Changes touching money force HIGH risk regardless of target count.
+_FINANCIAL_FIELDS = frozenset({"order_value", "shipping_cost"})
+
 _MEDIUM_TARGET_MAX = 10  # <= this -> MEDIUM; above -> HIGH
 _AUTO_CONFIRM_TARGET_MAX = 5  # LOW risk above this still requires confirmation
 _RISK_ORDER = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
+
+# The risk rules the model reads are rendered from the constants above, so the
+# prompt cannot drift from what _assess_risk enforces. Composed once at import
+# (byte-stable, prompt-cache friendly).
+PROPOSE_ACTION_SYSTEM_PROMPT = PROPOSE_ACTION_SYSTEM.format(
+    medium_target_max=_MEDIUM_TARGET_MAX,
+    auto_confirm_target_max=_AUTO_CONFIRM_TARGET_MAX,
+    irreversible_statuses=", ".join(sorted(_IRREVERSIBLE_STATUSES)),
+    financial_fields=", ".join(sorted(_FINANCIAL_FIELDS)),
+)
 
 
 # ===================================================================
@@ -91,6 +104,7 @@ _RISK_ORDER = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
 def _assess_risk(
     target_count: int,
     changes: dict[str, Any],
+    action_type: ActionType | None = None,
 ) -> RiskLevel:
     """Determine risk level from target count and change characteristics.
 
@@ -98,17 +112,21 @@ def _assess_risk(
       - 1 target → LOW
       - 2–10 targets → MEDIUM
       - >10 targets → HIGH
+      - Escalations → at least MEDIUM (priority changes deserve a human gate)
       - Irreversible status transitions → HIGH (override)
+      - Financial-field changes → HIGH (override)
     """
     new_status = changes.get("status", "")
     if isinstance(new_status, str) and new_status in _IRREVERSIBLE_STATUSES:
         return RiskLevel.HIGH
+    if _FINANCIAL_FIELDS & changes.keys():
+        return RiskLevel.HIGH
 
-    if target_count <= 1:
-        return RiskLevel.LOW
-    if target_count <= _MEDIUM_TARGET_MAX:
+    if target_count > _MEDIUM_TARGET_MAX:
+        return RiskLevel.HIGH
+    if target_count > 1 or action_type is ActionType.ESCALATE_ORDER:
         return RiskLevel.MEDIUM
-    return RiskLevel.HIGH
+    return RiskLevel.LOW
 
 
 # ===================================================================
@@ -159,15 +177,12 @@ async def propose_action(
                 relevant_data=json.dumps(relevant_data, default=str),
             )
             schema = ActionProposal.model_json_schema()
-            # Server-side fields: the model must never emit risk, its own
-            # confirmation gate, or the validator-only current_status metadata.
-            for server_side in ("current_status", "risk_level", "requires_confirmation"):
-                schema.get("properties", {}).pop(server_side, None)
-            # risk_level has no default, so it is in "required" — drop it there
-            # too or the API rejects the tool schema.
-            schema["required"] = [r for r in schema.get("required", []) if r != "risk_level"]
+            # The model grades its own risk_level / requires_confirmation —
+            # merged below with the server floor, raise-only. The validator-only
+            # current_status ground truth must never come from the model.
+            schema.get("properties", {}).pop("current_status", None)
             data, usage = await structured_call(
-                system=PROPOSE_ACTION_SYSTEM,
+                system=PROPOSE_ACTION_SYSTEM_PROMPT,
                 user=prompt,
                 tool_name="emit_action_proposal",
                 tool_description="Return a safe, auditable ActionProposal for the user's request.",
@@ -176,10 +191,14 @@ async def propose_action(
             logger.debug("propose_action usage=%s", usage)
             # The model's risk claims are advisory: recompute server-side and
             # let the claim raise risk/confirmation, never lower them (SEC-1).
-            claimed_risk = data.pop("risk_level", None)  # defensive: schema omits it
+            claimed_risk = data.pop("risk_level", None)
             claimed_confirm = bool(data.pop("requires_confirmation", False))
             target_count = len(data.get("target_ids", []))
-            computed = _assess_risk(target_count, data.get("changes", {}))
+            try:
+                proposed_type = ActionType(data.get("action_type", ""))
+            except ValueError:
+                proposed_type = None  # model_validate rejects it below
+            computed = _assess_risk(target_count, data.get("changes", {}), proposed_type)
             if claimed_risk in {r.value for r in RiskLevel}:
                 computed = max(computed, RiskLevel(claimed_risk), key=_RISK_ORDER.__getitem__)
             data["risk_level"] = computed
@@ -234,7 +253,7 @@ async def propose_action(
         current_status = relevant_data[0].get("status")
 
     target_count = len(target_ids)
-    risk = _assess_risk(target_count, changes)
+    risk = _assess_risk(target_count, changes, action_type)
 
     # Build human-readable impact summary
     entity_word = "entity" if target_count == 1 else "entities"
