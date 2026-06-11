@@ -32,6 +32,31 @@ logger = logging.getLogger(__name__)
 _MAX_HISTORY = 5
 
 
+def _envelope(
+    status: str,
+    plan: QueryPlan,
+    decision: RoutingDecision,
+    message: str,
+    *,
+    data: dict[str, Any] | None = None,
+    report: ReportOutput | None = None,
+    proposal: ActionProposal | None = None,
+    errors: list[str] | None = None,
+) -> dict[str, Any]:
+    """The one response shape every ``process_query`` return takes
+    (documented in its docstring)."""
+    return {
+        "status": status,
+        "plan": plan,
+        "routing": decision.value,
+        "message": message,
+        "data": data,
+        "report": report,
+        "proposal": proposal,
+        "errors": errors or [],
+    }
+
+
 # ===================================================================
 # Copilot class  (Story 6.1)
 # ===================================================================
@@ -119,32 +144,14 @@ class Copilot:
             options_text = "\n".join(f"  - {s}" for s in suggestions)
             message = CLARIFICATION_RESPONSE.format(options=options_text)
             self._update_history("assistant", message)
-            return {
-                "status": "clarify",
-                "plan": plan,
-                "routing": decision.value,
-                "message": message,
-                "data": None,
-                "report": None,
-                "proposal": None,
-                "errors": [],
-            }
+            return _envelope("clarify", plan, decision, message)
 
         # 4. Validate
         errors = await validate_query_plan(plan)
         if errors:
             msg = "Validation failed: " + "; ".join(errors)
             self._update_history("assistant", msg)
-            return {
-                "status": "error",
-                "plan": plan,
-                "routing": decision.value,
-                "message": msg,
-                "data": None,
-                "report": None,
-                "proposal": None,
-                "errors": errors,
-            }
+            return _envelope("error", plan, decision, msg, errors=errors)
 
         # 5. Intent dispatch
         if plan.intent is UserIntent.REPORT:
@@ -152,16 +159,13 @@ class Copilot:
 
             report = await generate_report(self.client, user_query)
             self._update_history("assistant", f"generated report: {report.title}")
-            return {
-                "status": "report",
-                "plan": plan,
-                "routing": decision.value,
-                "message": f"Report generated: {report.title}",
-                "data": None,
-                "report": report,
-                "proposal": None,
-                "errors": [],
-            }
+            return _envelope(
+                "report",
+                plan,
+                decision,
+                f"Report generated: {report.title}",
+                report=report,
+            )
 
         if plan.intent is UserIntent.ACTION_REQUEST:
             from agent.action_handler import propose_action
@@ -172,27 +176,23 @@ class Copilot:
             except ValueError as exc:
                 msg = str(exc)
                 self._update_history("assistant", msg)
-                return {
-                    "status": "error",
-                    "plan": plan,
-                    "routing": decision.value,
-                    "message": msg,
-                    "data": context.model_dump(),
-                    "report": None,
-                    "proposal": None,
-                    "errors": [msg],
-                }
+                return _envelope(
+                    "error",
+                    plan,
+                    decision,
+                    msg,
+                    data=context.model_dump(),
+                    errors=[msg],
+                )
             self._update_history("assistant", _summarize_plan(plan))
-            return {
-                "status": "action_proposed",
-                "plan": plan,
-                "routing": decision.value,
-                "message": proposal.impact_summary,
-                "data": context.model_dump(),
-                "report": None,
-                "proposal": proposal,
-                "errors": [],
-            }
+            return _envelope(
+                "action_proposed",
+                plan,
+                decision,
+                proposal.impact_summary,
+                data=context.model_dump(),
+                proposal=proposal,
+            )
 
         result = await execute_query(self.client, plan)
 
@@ -215,16 +215,7 @@ class Copilot:
         # Record the interpretation (not the user-facing message) so the next
         # turn can resolve references like "those" / "the same ones".
         self._update_history("assistant", _summarize_plan(plan))
-        return {
-            "status": status,
-            "plan": plan,
-            "routing": decision.value,
-            "message": message,
-            "data": result.model_dump(),
-            "report": None,
-            "proposal": None,
-            "errors": [],
-        }
+        return _envelope(status, plan, decision, message, data=result.model_dump())
 
     async def execute_confirmed_action(
         self, proposal: ActionProposal, *, confirmed: bool
@@ -237,38 +228,6 @@ class Copilot:
         from agent.action_handler import execute_action
 
         return await execute_action(self.client, proposal, confirmed=confirmed)
-
-    # ------------------------------------------------------------------
-    # Action processing
-    # ------------------------------------------------------------------
-
-    async def process_action(
-        self, user_query: str, relevant_data: dict[str, Any]
-    ) -> ActionProposal:
-        """Produce an ActionProposal from a user request and context data.
-
-        Delegates to ``propose_action`` which tries LLM first, then falls
-        back to keyword-based detection.
-        """
-        from agent.action_handler import propose_action
-
-        # Convert dict to list of rows for propose_action
-        rows = relevant_data.get("items", [relevant_data])
-        return await propose_action(self.client, user_query, rows)
-
-    # ------------------------------------------------------------------
-    # Report generation
-    # ------------------------------------------------------------------
-
-    async def generate_report(self, report_request: str, data: dict[str, Any]) -> ReportOutput:
-        """Generate a structured report from a request and data payload.
-
-        Delegates to ``report_generator.generate_report`` which produces
-        rule-based reports with optional LLM narrative enrichment.
-        """
-        from agent.report_generator import generate_report
-
-        return await generate_report(self.client, report_request)
 
 
 # ===================================================================
