@@ -117,9 +117,11 @@ class TestValidation:
         assert errors == []
 
     async def test_oms_exception_filter_fields_validate(self, sample_query_plan):
-        """OMS hosts both orders and exceptions; exception fields must validate."""
+        """Exception fields validate when the plan actually queries exceptions
+        (the dispatcher branches to list_exceptions on primary_entity)."""
         plan = sample_query_plan(
             target_systems=[TargetSystem.OMS],
+            primary_entity="exception",
             filters=[
                 DataFilter(field="severity", operator="eq", value="critical"),
                 DataFilter(field="date_from", operator="gte", value="2026-01-01"),
@@ -127,6 +129,54 @@ class TestValidation:
         )
         errors = await validate_query_plan(plan)
         assert errors == []
+
+    async def test_cross_entity_filter_rejected(self, sample_query_plan):
+        """An exception field on an order-entity plan is rejected: the order
+        dispatch branch never reads it, so passing validation would mean the
+        unfiltered order list is returned as the 'filtered' answer."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            primary_entity="order",
+            filters=[DataFilter(field="severity", operator="eq", value="critical")],
+        )
+        errors = await validate_query_plan(plan)
+        assert len(errors) == 1
+        assert "severity" in errors[0]
+        assert "exception" in errors[0]  # hint at the entity that has the field
+
+    async def test_cross_entity_date_filter_rejected(self, sample_query_plan):
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            primary_entity="order",
+            filters=[DataFilter(field="date_from", operator="gte", value="2026-01-01")],
+        )
+        errors = await validate_query_plan(plan)
+        assert any("date_from" in e for e in errors)
+
+    async def test_cross_system_join_filters_validate_per_system(self, sample_query_plan):
+        """A join plan carries one primary_entity, but each system dispatches
+        its own entity (TMS always queries shipments) — a shipment field on an
+        order-entity join plan must keep validating."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS, TargetSystem.TMS],
+            primary_entity="order",
+            requires_join=True,
+            join_key="order_id",
+            filters=[DataFilter(field="sla_status", operator="eq", value="breached")],
+        )
+        errors = await validate_query_plan(plan)
+        assert errors == []
+
+    async def test_plural_entity_spelling_resolves_to_orders(self, sample_query_plan):
+        """The interpreter and fixtures spell the entity both 'order' and
+        'orders'; the dispatcher treats anything that isn't 'exception' as
+        orders, and validation must agree."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            primary_entity="orders",
+            filters=[DataFilter(field="channel", operator="eq", value="web")],
+        )
+        assert await validate_query_plan(plan) == []
 
     async def test_unknown_oms_field_still_rejected(self, sample_query_plan):
         """A field that exists under no OMS entity is still flagged."""
@@ -183,18 +233,22 @@ class TestValidation:
 
     async def test_dispatchable_eq_filters_still_pass(self, sample_query_plan):
         """The shortcut/eq filters the dispatcher really executes still validate."""
-        oms = sample_query_plan(
+        oms_exc = sample_query_plan(
             target_systems=[TargetSystem.OMS],
-            filters=[
-                DataFilter(field="severity", operator="eq", value="critical"),
-                DataFilter(field="at_risk", operator="eq", value=True),
-            ],
+            primary_entity="exception",
+            filters=[DataFilter(field="severity", operator="eq", value="critical")],
+        )
+        oms_ord = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            primary_entity="order",
+            filters=[DataFilter(field="at_risk", operator="eq", value=True)],
         )
         tms = sample_query_plan(
             target_systems=[TargetSystem.TMS],
             filters=[DataFilter(field="sla_status", operator="eq", value="breached")],
         )
-        assert await validate_query_plan(oms) == []
+        assert await validate_query_plan(oms_exc) == []
+        assert await validate_query_plan(oms_ord) == []
         assert await validate_query_plan(tms) == []
 
 

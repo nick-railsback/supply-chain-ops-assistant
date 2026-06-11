@@ -112,6 +112,21 @@ ORDER_STATUS_TRANSITIONS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 
+def _effective_entity(system: str, primary_entity: str) -> str:
+    """The entity the dispatcher will actually query for *system*.
+
+    Mirrors ``agent.copilot._dispatch_single_system`` exactly: TMS always
+    queries shipments, WMS always inventory, and OMS branches to exceptions
+    only when the plan's primary entity is 'exception' — any other spelling
+    ('order', 'orders', 'unknown', ...) lists orders. Validation must judge a
+    filter against this entity, not against any entity the system hosts, or
+    cross-entity filters pass and are then silently dropped at dispatch.
+    """
+    if system == "oms":
+        return "exception" if primary_entity == "exception" else "order"
+    return {"wms": "inventory", "tms": "shipment"}.get(system, primary_entity)
+
+
 async def validate_query_plan(plan: QueryPlan) -> list[str]:
     """Validate a QueryPlan against the field registry and operator rules.
 
@@ -123,21 +138,12 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
     if not plan.target_systems and plan.intent.value != "clarification_needed":
         errors.append("QueryPlan must specify at least one target system.")
 
-    # Validate each filter
+    # Validate each filter against the entity each system will actually query
     for f in plan.filters:
         matched = False
         for system in plan.target_systems:
-            # A system can host more than one entity (oms → orders AND
-            # exceptions), so match the field against any entity registered
-            # under it rather than a single hard-coded entity.
-            field_type = next(
-                (
-                    ftype
-                    for (sys, _entity, field), ftype in FIELD_REGISTRY.items()
-                    if sys == system.value and field == f.field
-                ),
-                None,
-            )
+            entity = _effective_entity(system.value, plan.primary_entity)
+            field_type = FIELD_REGISTRY.get((system.value, entity, f.field))
             if field_type is not None:
                 matched = True
                 valid_ops = VALID_OPERATORS.get(field_type, [])
@@ -151,22 +157,19 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
                     # Type-valid is not enough: the dispatcher executes only a
                     # subset of fields and ignores the operator, so reject pairs
                     # it would silently mis-run (e.g. order_value lt -> min_value).
-                    allowed = next(
-                        (
-                            ops
-                            for (sys_, _entity, fld), ops in DISPATCHABLE_OPERATORS.items()
-                            if sys_ == system.value and fld == f.field
-                        ),
-                        None,
-                    )
+                    allowed = DISPATCHABLE_OPERATORS.get((system.value, entity, f.field))
                     if allowed is None:
                         executable = sorted(
-                            {fld for (s, _e, fld) in DISPATCHABLE_OPERATORS if s == system.value}
+                            {
+                                fld
+                                for (s, e, fld) in DISPATCHABLE_OPERATORS
+                                if s == system.value and e == entity
+                            }
                         )
                         errors.append(
                             f"Filter field '{f.field}' is recognized but cannot be executed "
-                            f"by the query dispatcher yet. Executable {system.value} fields: "
-                            f"{executable}"
+                            f"by the query dispatcher yet. Executable {system.value} {entity} "
+                            f"fields: {executable}"
                         )
                     elif f.operator not in allowed:
                         errors.append(
@@ -176,8 +179,30 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
                 break
 
         if not matched and plan.target_systems:
+            queried = sorted(
+                {
+                    f"{s.value} {_effective_entity(s.value, plan.primary_entity)}"
+                    for s in plan.target_systems
+                }
+            )
+            # If the field lives on a sibling entity, say so — the plan's
+            # primary_entity is what's wrong, not the filter.
+            other_entities = sorted(
+                {
+                    entity_
+                    for (sys_, entity_, fld) in FIELD_REGISTRY
+                    if any(sys_ == s.value for s in plan.target_systems) and fld == f.field
+                }
+            )
+            hint = (
+                f" The field exists on entity '{other_entities[0]}'; set primary_entity "
+                f"to '{other_entities[0]}' if that was the intent."
+                if other_entities
+                else ""
+            )
             errors.append(
-                f"Unknown field '{f.field}' for systems {[s.value for s in plan.target_systems]}."
+                f"Filter field '{f.field}' is not available on the entities this plan "
+                f"queries ({queried}); the dispatcher would silently ignore it.{hint}"
             )
 
     # Cross-system query must specify a join key

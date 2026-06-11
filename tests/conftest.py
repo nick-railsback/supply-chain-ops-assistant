@@ -24,10 +24,11 @@ def sample_query_plan():
         **kwargs,
     ):
         filters = kwargs.pop("filters", [])
+        primary_entity = kwargs.pop("primary_entity", "orders")
         return QueryPlan(
             intent=intent,
             target_systems=target_systems or [TargetSystem.OMS],
-            primary_entity="orders",
+            primary_entity=primary_entity,
             filters=filters,
             confidence=confidence,
             reasoning="Test query plan",
