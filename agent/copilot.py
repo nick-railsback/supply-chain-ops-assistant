@@ -54,6 +54,10 @@ def _envelope(
         "report": report,
         "proposal": proposal,
         "errors": errors or [],
+        # Carried on every envelope, not just the read path's 'flagged'
+        # status: reports and proposals built from a flag-band interpretation
+        # must reach the CLI with the warning intact.
+        "flagged": decision == RoutingDecision.EXECUTE_AND_FLAG,
     }
 
 
@@ -124,6 +128,9 @@ class Copilot:
           - ``routing``: the RoutingDecision value
           - ``message``: human-readable response string
           - ``errors``: validation error list (if any)
+          - ``flagged``: True when the interpretation routed EXECUTE_AND_FLAG
+            (low confidence) — set for every status, so report and action
+            envelopes carry the warning too
         """
         from config.logging import new_trace
 

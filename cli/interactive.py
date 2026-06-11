@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from agent.copilot import Copilot
+from config.prompts import EXECUTE_AND_FLAG_RESPONSE
 from models.action import ActionProposal
 from models.query import ConfidenceSignals, QueryPlan
 from models.report import ReportOutput
@@ -693,6 +694,14 @@ class InteractiveCLI:
 
         if status == "flagged":
             self.console.print(f"[yellow]\u26a0 {message}[/yellow]")
+        elif result.get("flagged"):
+            # Flag-band interpretation behind a report or proposal: warn
+            # before anything renders \u2014 and before any confirmation prompt \u2014
+            # so the operator knows to double-check the interpretation.
+            caveat = EXECUTE_AND_FLAG_RESPONSE.format(
+                interpretation=plan.reasoning if plan is not None else message
+            )
+            self.console.print(f"[yellow]\u26a0 {caveat}[/yellow]")
 
         if status == "report" and result.get("report") is not None:
             self.console.print(render_report(result["report"]))
