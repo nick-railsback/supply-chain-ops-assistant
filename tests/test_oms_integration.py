@@ -6,8 +6,8 @@ class TestListOrders:
         resp = await oms_client.get("/orders")
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 5
-        assert len(data["items"]) == 5
+        assert data["total"] == 6
+        assert len(data["items"]) == 6
 
     async def test_list_orders_status_filter(self, oms_client):
         resp = await oms_client.get("/orders", params={"status": "pending"})
@@ -30,7 +30,7 @@ class TestListOrders:
         resp = await oms_client.get("/orders", params={"offset": 0, "limit": 2})
         assert resp.status_code == 200
         data = resp.json()
-        assert data["total"] == 5
+        assert data["total"] == 6
         assert len(data["items"]) == 2
         assert data["offset"] == 0
         assert data["limit"] == 2
@@ -43,7 +43,7 @@ class TestListOrders:
         # Third page
         resp3 = await oms_client.get("/orders", params={"offset": 4, "limit": 2})
         data3 = resp3.json()
-        assert len(data3["items"]) == 1
+        assert len(data3["items"]) == 2
 
 
 class TestGetOrder:
