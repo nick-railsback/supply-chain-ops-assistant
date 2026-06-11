@@ -8,7 +8,9 @@ from __future__ import annotations
 
 from config.settings import get_settings
 from models.action import ActionProposal, ActionType
+from models.oms import ExceptionPatch, OrderPatch
 from models.query import QueryPlan
+from models.tms import ShipmentPatch
 
 # ---------------------------------------------------------------------------
 # Field registry: (system, entity, field) -> field_type
@@ -101,6 +103,29 @@ VALID_OPERATORS: dict[str, list[str]] = {
     "date": ["eq", "gt", "gte", "lt", "lte", "between"],
     "boolean": ["eq"],
 }
+
+# ---------------------------------------------------------------------------
+# Patchable change fields, derived from the PATCH contracts the services
+# enforce (extra="forbid"). Adding a field to a patch model permits it here
+# automatically; the validator can't drift from what the backends accept.
+# ---------------------------------------------------------------------------
+
+_PATCHABLE_FIELDS: dict[str, frozenset[str]] = {
+    "order": frozenset(OrderPatch.model_fields),
+    "exception": frozenset(ExceptionPatch.model_fields),
+    "shipment": frozenset(ShipmentPatch.model_fields),
+}
+
+_ACTION_ENTITY: dict[ActionType, str] = {
+    ActionType.UPDATE_ORDER_STATUS: "order",
+    ActionType.ESCALATE_ORDER: "order",
+    ActionType.UPDATE_EXCEPTION: "exception",
+    ActionType.ASSIGN_EXCEPTION: "exception",
+    ActionType.FLAG_SHIPMENTS: "shipment",
+}
+
+# BULK_UPDATE routes per target by id prefix (same map _dispatch_action uses).
+_ID_PREFIX_ENTITY: dict[str, str] = {"ORD": "order", "EXC": "exception", "SHP": "shipment"}
 
 # ---------------------------------------------------------------------------
 # Order status transition map
@@ -250,6 +275,28 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
             f"Action affects {len(proposal.target_ids)} entities, "
             f"exceeding the cap of {settings.bulk_update_cap}."
         )
+
+    # Changes must be expressible by the target entity's PATCH contract — the
+    # services forbid unknown fields (422), so rejecting here keeps a doomed
+    # proposal from passing human confirmation first.
+    if proposal.changes:
+        entity = _ACTION_ENTITY.get(proposal.action_type)
+        entities = (
+            {entity}
+            if entity is not None
+            else {
+                _ID_PREFIX_ENTITY[tid[:3]]
+                for tid in proposal.target_ids
+                if tid[:3] in _ID_PREFIX_ENTITY
+            }
+        )
+        for ent in sorted(entities):
+            unknown = sorted(set(proposal.changes) - _PATCHABLE_FIELDS[ent])
+            if unknown:
+                errors.append(
+                    f"Changes {unknown} cannot be applied to {ent} targets; the {ent} "
+                    f"PATCH contract accepts only {sorted(_PATCHABLE_FIELDS[ent])}."
+                )
 
     # Status transition validation for order status updates: every target is
     # checked against its own context status — a target absent from the queried

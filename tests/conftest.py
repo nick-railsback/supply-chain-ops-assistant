@@ -48,10 +48,11 @@ def sample_action_proposal():
         risk_level=RiskLevel.LOW,
         **kwargs,
     ):
+        changes = kwargs.pop("changes", {"status": "resolved"})
         return ActionProposal(
             action_type=action_type,
             target_ids=target_ids or ["EXC-0001"],
-            changes={"status": "resolved"},
+            changes=changes,
             reasoning="Test action",
             impact_summary="Test impact",
             risk_level=risk_level,

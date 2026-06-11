@@ -116,6 +116,48 @@ class TestValidation:
         errors = await validate_action_proposal(proposal)
         assert errors == []
 
+    async def test_changes_outside_patch_contract_rejected(self, sample_action_proposal):
+        """A change the service's PATCH contract forbids fails validation here,
+        before the operator is asked to confirm an action that can only 422."""
+        proposal = sample_action_proposal(
+            action_type=ActionType.UPDATE_EXCEPTION,
+            changes={"severity": "low"},
+        )
+        errors = await validate_action_proposal(proposal)
+        assert len(errors) == 1
+        assert "severity" in errors[0]
+        assert "assigned_to" in errors[0] and "status" in errors[0]  # the allowed set
+
+    async def test_flag_shipments_unknown_change_rejected(self, sample_action_proposal):
+        proposal = sample_action_proposal(
+            action_type=ActionType.FLAG_SHIPMENTS,
+            target_ids=["SHP-20250301-00001"],
+            changes={"carrier": "FedEx"},
+        )
+        errors = await validate_action_proposal(proposal)
+        assert any("carrier" in e for e in errors)
+
+    async def test_bulk_update_validates_changes_per_target_entity(
+        self, sample_action_proposal
+    ):
+        """notes is patchable on orders but not shipments; a bulk update over
+        both entities is rejected for the entity that can't express it."""
+        proposal = sample_action_proposal(
+            action_type=ActionType.BULK_UPDATE,
+            target_ids=["ORD-2025-000001", "SHP-20250301-00001"],
+            changes={"notes": "expedite"},
+        )
+        errors = await validate_action_proposal(proposal)
+        assert len(errors) == 1
+        assert "shipment" in errors[0]
+
+    async def test_patchable_changes_pass(self, sample_action_proposal):
+        proposal = sample_action_proposal(
+            action_type=ActionType.ASSIGN_EXCEPTION,
+            changes={"assigned_to": "Sarah Chen"},
+        )
+        assert await validate_action_proposal(proposal) == []
+
     async def test_oms_exception_filter_fields_validate(self, sample_query_plan):
         """Exception fields validate when the plan actually queries exceptions
         (the dispatcher branches to list_exceptions on primary_entity)."""

@@ -204,6 +204,50 @@ class TestInvalidProposalSurfaces:
         assert "Invalid status transition" in result["message"]
         assert result["proposal"] is None
 
+    async def test_unpatchable_change_never_reaches_confirmation(self, monkeypatch):
+        """A proposal whose changes the PATCH contract forbids errors out
+        before any confirmation prompt — not 422-per-target after approval."""
+        from unittest.mock import patch
+
+        from agent.copilot import Copilot
+        from config.settings import get_settings
+        from models.query import QueryPlan, QueryResult
+        from models.shared import TargetSystem, UserIntent
+
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        plan = QueryPlan(
+            intent=UserIntent.ACTION_REQUEST,
+            target_systems=[TargetSystem.OMS],
+            primary_entity="exception",
+            filters=[],
+            confidence=0.95,
+            reasoning="test plan",
+        )
+        context = QueryResult(
+            data=[{"exception_id": "EXC-0001", "severity": "critical"}],
+            total_count=1,
+            systems_queried=[TargetSystem.OMS],
+        )
+        tool_input = {
+            "action_type": "update_exception",
+            "target_ids": ["EXC-0001"],
+            "changes": {"severity": "low"},
+            "reasoning": "downgrade severity",
+            "impact_summary": "1 exception",
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        copilot = Copilot()
+        with (
+            patch("agent.copilot.interpret_query", AsyncMock(return_value=plan)),
+            patch("agent.copilot.execute_query", AsyncMock(return_value=context)),
+            patch("agent.action_handler.structured_call", call),
+        ):
+            result = await copilot.process_query("set exception EXC-0001 severity to low")
+
+        assert result["status"] == "error"
+        assert "severity" in result["message"]
+        assert result["proposal"] is None
+
 
 class TestConfirmActionFailSafe:
     async def test_confirm_action_blocks_when_required(self):
