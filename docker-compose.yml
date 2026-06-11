@@ -53,7 +53,7 @@ services:
 
   copilot:
     build: .
-    command: python -c "from cli.interactive import main; main()"
+    command: python -m cli.interactive
     stdin_open: true
     tty: true
     depends_on:

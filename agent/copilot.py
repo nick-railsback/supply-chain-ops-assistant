@@ -100,6 +100,11 @@ class Copilot:
           - ``message``: human-readable response string
           - ``errors``: validation error list (if any)
         """
+        from config.logging import new_trace
+
+        # One trace per turn: OpsClient._trace_headers propagates X-Trace-ID and
+        # TraceMiddleware echoes it, so a cross-system turn shares one trace id.
+        new_trace()
         self._update_history("user", user_query)
 
         # 1. Interpret

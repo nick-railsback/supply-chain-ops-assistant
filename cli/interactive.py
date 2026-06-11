@@ -744,6 +744,10 @@ class InteractiveCLI:
 
 def main() -> None:
     """Launch the interactive CLI."""
+    from config.logging import setup_logging
+    from config.settings import get_settings
+
+    setup_logging(get_settings().log_level)
     cli = InteractiveCLI()
     asyncio.run(cli.run())
 
