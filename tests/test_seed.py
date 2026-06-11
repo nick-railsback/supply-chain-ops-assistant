@@ -58,3 +58,28 @@ def test_seed_path_yields_at_risk_eligible_orders():
         and now_str <= r["promised_delivery_date"] <= cutoff_str
     ]
     assert at_risk, "seed path should yield at least one at-risk-eligible order"
+
+
+def test_seed_tables_are_the_orm_tables():
+    """The seeder fills the very tables the services declare — no parallel copy."""
+    from seed.seed_db import inventory_table, orders_table, shipments_table
+    from services.oms_api import Base as OMSBase
+    from services.tms_api import Base as TMSBase
+    from services.wms_api import Base as WMSBase
+
+    assert orders_table is OMSBase.metadata.tables["orders"]
+    assert shipments_table is TMSBase.metadata.tables["shipments"]
+    assert inventory_table is WMSBase.metadata.tables["inventory"]
+
+
+def test_mapped_shipments_have_destinations_and_valid_statuses():
+    """Shipment rows carry real destinations and only ShipmentStatus values
+    (the generator previously copied order statuses, e.g. 'shipped')."""
+    from models.tms import ShipmentStatus
+    from seed.seed_db import _map_shipments
+
+    data = DataGenerator(seed_value=42).generate_all()
+    rows = _map_shipments(data["shipments"])
+    valid = {s.value for s in ShipmentStatus}
+    assert all(r["destination_zip"] and r["destination_state"] for r in rows)
+    assert all(r["status"] in valid for r in rows)

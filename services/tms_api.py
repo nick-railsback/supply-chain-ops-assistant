@@ -26,7 +26,8 @@ from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
-# Schema also defined in: models/tms.py (Pydantic), seed/seed_db.py (table creation)
+# Schema also defined in: models/tms.py (Pydantic). The seeder derives its
+# tables from this ORM (Base.metadata), so there is no third copy.
 # ---------------------------------------------------------------------------
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tms.db"
@@ -198,26 +199,9 @@ async def get_shipment(
     if shipment is None:
         raise HTTPException(status_code=404, detail=f"Shipment {shipment_id} not found")
 
-    data = {
-        "shipment_id": shipment.shipment_id,
-        "order_id": shipment.order_id,
-        "carrier": shipment.carrier,
-        "service_level": shipment.service_level,
-        "status": shipment.status,
-        "tracking_number": shipment.tracking_number,
-        "origin_center_id": shipment.origin_center_id,
-        "destination_zip": shipment.destination_zip or "",
-        "destination_state": shipment.destination_state or "",
-        "weight_lbs": shipment.weight_lbs,
-        "shipping_cost": shipment.shipping_cost,
-        "label_created_at": shipment.label_created_at,
-        "estimated_delivery": shipment.estimated_delivery,
-        "actual_delivery": shipment.actual_delivery,
-        "sla_target": shipment.sla_target,
-        "sla_status": shipment.sla_status,
-        "tracking_events": [TrackingEvent.model_validate(e) for e in shipment.tracking_events],
-    }
-    return ShipmentWithTracking.model_validate(data)
+    shipment_data = Shipment.model_validate(shipment)
+    events = [TrackingEvent.model_validate(e) for e in shipment.tracking_events]
+    return ShipmentWithTracking(**shipment_data.model_dump(), tracking_events=events)
 
 
 @app.get("/stats/carrier-performance", response_model=list[CarrierStats])

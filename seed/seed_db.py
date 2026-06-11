@@ -22,6 +22,9 @@ import sqlalchemy as sa
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from seed.generator import DataGenerator
+from services.oms_api import Base as OMSBase
+from services.tms_api import Base as TMSBase
+from services.wms_api import Base as WMSBase
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -32,138 +35,24 @@ WMS_DB = DATA_DIR / "wms.db"
 TMS_DB = DATA_DIR / "tms.db"
 
 # ---------------------------------------------------------------------------
-# OMS metadata
-# Schema also defined in: models/oms.py (Pydantic), services/oms_api.py (ORM)
+# Schema source of truth: the seeder creates and fills exactly the tables the
+# services declare, via their Base.metadata. Adding a column to an ORM model is
+# now a one-file edit. Each service declares its own DeclarativeBase, so the
+# three metadata don't bleed together; services never import seed, so there's
+# no import cycle.
 # ---------------------------------------------------------------------------
-oms_metadata = sa.MetaData()
+oms_metadata = OMSBase.metadata
+wms_metadata = WMSBase.metadata
+tms_metadata = TMSBase.metadata
 
-orders_table = sa.Table(
-    "orders",
-    oms_metadata,
-    sa.Column("order_id", sa.String, primary_key=True),
-    sa.Column("customer_id", sa.String),
-    sa.Column("customer_name", sa.String),
-    sa.Column("customer_email", sa.String),
-    sa.Column("customer_tier", sa.String),
-    sa.Column("status", sa.String, nullable=False),
-    sa.Column("channel", sa.String),
-    sa.Column("created_at", sa.String, nullable=False),
-    sa.Column("updated_at", sa.String),
-    sa.Column("promised_delivery_date", sa.String),
-    sa.Column("fulfillment_center_id", sa.String),
-    sa.Column("total_value", sa.Float),
-    sa.Column("currency", sa.String, default="USD"),
-    sa.Column("line_item_count", sa.Integer),
-    sa.Column("notes", sa.String),
-)
-
-line_items_table = sa.Table(
-    "line_items",
-    oms_metadata,
-    sa.Column("line_item_id", sa.String, primary_key=True),
-    sa.Column("order_id", sa.String, sa.ForeignKey("orders.order_id")),
-    sa.Column("sku", sa.String, nullable=False),
-    sa.Column("product_name", sa.String),
-    sa.Column("quantity", sa.Integer, nullable=False),
-    sa.Column("unit_price", sa.Float),
-    sa.Column("status", sa.String),
-)
-
-order_exceptions_table = sa.Table(
-    "order_exceptions",
-    oms_metadata,
-    sa.Column("exception_id", sa.String, primary_key=True),
-    sa.Column("order_id", sa.String),
-    sa.Column("exception_type", sa.String),
-    sa.Column("severity", sa.String),
-    sa.Column("status", sa.String),
-    sa.Column("created_at", sa.String),
-    sa.Column("resolved_at", sa.String),
-    sa.Column("description", sa.String),
-    sa.Column("assigned_to", sa.String),
-)
-
-# ---------------------------------------------------------------------------
-# WMS metadata
-# Schema also defined in: models/wms.py (Pydantic), services/wms_api.py (ORM)
-# ---------------------------------------------------------------------------
-wms_metadata = sa.MetaData()
-
-fulfillment_centers_table = sa.Table(
-    "fulfillment_centers",
-    wms_metadata,
-    sa.Column("center_id", sa.String, primary_key=True),
-    sa.Column("name", sa.String, nullable=False),
-    sa.Column("region", sa.String),
-    sa.Column("capacity_units", sa.Integer),
-    sa.Column("current_utilization", sa.Float),
-    sa.Column("active", sa.Boolean, default=True),
-)
-
-inventory_table = sa.Table(
-    "inventory",
-    wms_metadata,
-    sa.Column("inventory_id", sa.String, primary_key=True),
-    sa.Column("sku", sa.String, nullable=False),
-    sa.Column("product_name", sa.String),
-    sa.Column("fulfillment_center_id", sa.String),
-    sa.Column("quantity_on_hand", sa.Integer),
-    sa.Column("quantity_allocated", sa.Integer),
-    sa.Column("quantity_available", sa.Integer),
-    sa.Column("reorder_point", sa.Integer),
-    sa.Column("last_counted_at", sa.String),
-    sa.Column("category", sa.String),
-)
-
-stock_movements_table = sa.Table(
-    "stock_movements",
-    wms_metadata,
-    sa.Column("movement_id", sa.String, primary_key=True),
-    sa.Column("sku", sa.String, nullable=False),
-    sa.Column("fulfillment_center_id", sa.String),
-    sa.Column("movement_type", sa.String),
-    sa.Column("quantity", sa.Integer),
-    sa.Column("reference_id", sa.String),
-    sa.Column("timestamp", sa.String),
-)
-
-# ---------------------------------------------------------------------------
-# TMS metadata
-# Schema also defined in: models/tms.py (Pydantic), services/tms_api.py (ORM)
-# ---------------------------------------------------------------------------
-tms_metadata = sa.MetaData()
-
-shipments_table = sa.Table(
-    "shipments",
-    tms_metadata,
-    sa.Column("shipment_id", sa.String, primary_key=True),
-    sa.Column("order_id", sa.String),
-    sa.Column("carrier", sa.String),
-    sa.Column("service_level", sa.String),
-    sa.Column("status", sa.String),
-    sa.Column("tracking_number", sa.String),
-    sa.Column("origin_center_id", sa.String),
-    sa.Column("destination_zip", sa.String),
-    sa.Column("destination_state", sa.String),
-    sa.Column("weight_lbs", sa.Float),
-    sa.Column("shipping_cost", sa.Float),
-    sa.Column("label_created_at", sa.String),
-    sa.Column("estimated_delivery", sa.String),
-    sa.Column("actual_delivery", sa.String),
-    sa.Column("sla_target", sa.String),
-    sa.Column("sla_status", sa.String),
-)
-
-tracking_events_table = sa.Table(
-    "tracking_events",
-    tms_metadata,
-    sa.Column("event_id", sa.String, primary_key=True),
-    sa.Column("shipment_id", sa.String, sa.ForeignKey("shipments.shipment_id")),
-    sa.Column("timestamp", sa.String),
-    sa.Column("location", sa.String),
-    sa.Column("status", sa.String),
-    sa.Column("description", sa.String),
-)
+orders_table = oms_metadata.tables["orders"]
+line_items_table = oms_metadata.tables["line_items"]
+order_exceptions_table = oms_metadata.tables["order_exceptions"]
+fulfillment_centers_table = wms_metadata.tables["fulfillment_centers"]
+inventory_table = wms_metadata.tables["inventory"]
+stock_movements_table = wms_metadata.tables["stock_movements"]
+shipments_table = tms_metadata.tables["shipments"]
+tracking_events_table = tms_metadata.tables["tracking_events"]
 
 # ---------------------------------------------------------------------------
 # Database URL helpers
@@ -332,8 +221,8 @@ def _map_shipments(shipments: list[dict[str, Any]]) -> list[dict[str, Any]]:
             "status": s["status"],
             "tracking_number": s["tracking_number"],
             "origin_center_id": s["origin_center_id"],
-            "destination_zip": None,
-            "destination_state": None,
+            "destination_zip": s["destination_zip"],
+            "destination_state": s["destination_state"],
             "weight_lbs": round(random.uniform(0.5, 25.0), 1),
             "shipping_cost": round(random.uniform(5.0, 45.0), 2),
             "label_created_at": s["shipped_at"],
