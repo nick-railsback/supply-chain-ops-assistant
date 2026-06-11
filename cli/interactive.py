@@ -696,12 +696,18 @@ class InteractiveCLI:
 
         # Format and display the data
         data = result.get("data")
-        if data:
-            formatted = format_query_result(data)
-            if isinstance(formatted, str):
-                self.console.print(formatted)
-            else:
-                self.console.print(formatted)
+        if data and data.get("partial_failure"):
+            for system, err in (data.get("error_details") or {}).items():
+                self.console.print(f"[red]✗ {system.upper()} unreachable: {err}[/red]")
+        if data and data.get("data"):
+            self.console.print(format_query_result(data))
+        elif data and data.get("partial_failure"):
+            self.console.print(
+                "[yellow]No rows returned — results may be incomplete because some "
+                "systems did not respond.[/yellow]"
+            )
+        elif data is not None:
+            self.console.print("No results found for that query.")
         else:
             self.console.print(message)
 

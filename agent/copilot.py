@@ -89,7 +89,7 @@ class Copilot:
         """Full pipeline: interpret -> route -> validate -> execute.
 
         Returns a dict with keys:
-          - ``status``: one of "success", "clarify", "flagged", "error"
+          - ``status``: one of "success", "partial", "clarify", "flagged", "error"
           - ``data``: the query result payload (when executed)
           - ``plan``: the interpreted QueryPlan
           - ``routing``: the RoutingDecision value
@@ -140,6 +140,14 @@ class Copilot:
         if decision == RoutingDecision.EXECUTE_AND_FLAG:
             message = EXECUTE_AND_FLAG_RESPONSE.format(interpretation=plan.reasoning)
             status = "flagged"
+        elif result.partial_failure:
+            failed = ", ".join(sorted((result.error_details or {}).keys()))
+            ok = len(result.systems_queried) - len(result.error_details or {})
+            message = (
+                f"Partial results: {result.total_count} result(s) from {ok} of "
+                f"{len(result.systems_queried)} system(s); {failed} did not respond."
+            )
+            status = "partial"
         else:
             message = f"Query executed successfully. {result.total_count} result(s) returned."
             status = "success"
