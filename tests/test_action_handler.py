@@ -536,7 +536,12 @@ class TestValidateProposalPerTarget:
         )
         assert await validate_action_proposal(proposal) == []
 
-    async def test_llm_path_invalid_transition_falls_back(self, monkeypatch):
+
+class TestLLMProposalRejectionSurfaces:
+    """A proposal the validator rejects surfaces as an error — it must not
+    silently degrade into a different (rule-built) proposal."""
+
+    async def test_llm_path_invalid_transition_raises(self, monkeypatch):
         monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
         tool_input = {
             "action_type": "update_order_status",
@@ -548,8 +553,43 @@ class TestValidateProposalPerTarget:
         call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
         relevant_data = [{"order_id": "ORD-2025-001", "status": "pending"}]
         with patch("agent.action_handler.structured_call", call):
-            proposal = await propose_action(None, "mark order delivered", relevant_data)
+            with pytest.raises(ValueError) as exc_info:
+                await propose_action(None, "mark order delivered", relevant_data)
 
-        # pending -> delivered is invalid, so the LLM proposal fails validation
-        # and the rule path takes over (its reasoning is query-derived).
-        assert proposal.reasoning.startswith("Action requested via:")
+        assert "Invalid status transition" in str(exc_info.value)
+
+
+class TestFallbackTargets:
+    """The rule fallback never fans a request out across the whole context:
+    ids named explicitly in the query win, otherwise only rows carrying the
+    id field of the action's entity become targets."""
+
+    async def test_explicit_id_in_query_narrows_targets(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        rows = [{"order_id": f"ORD-2025-{i:04d}"} for i in range(50)]
+        proposal = await propose_action(None, "escalate order ORD-2025-0001", rows)
+
+        assert proposal.target_ids == ["ORD-2025-0001"]
+
+    async def test_explicit_id_must_exist_in_context(self, monkeypatch):
+        """An id named in the query but absent from context yields no targets
+        (and therefore a validation error), never a fan-out."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        rows = [{"order_id": "ORD-2025-0001"}, {"order_id": "ORD-2025-0002"}]
+        with pytest.raises(ValueError, match="at least one target_id"):
+            await propose_action(None, "escalate order ORD-2025-9999", rows)
+
+    async def test_entity_mismatched_rows_excluded(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        rows = [
+            {"exception_id": "EXC-0001"},
+            {"order_id": "ORD-2025-0001"},
+            {"shipment_id": "SHP-20250301-00001"},
+        ]
+        proposal = await propose_action(None, "resolve exception", rows)
+
+        assert proposal.action_type == ActionType.UPDATE_EXCEPTION
+        assert proposal.target_ids == ["EXC-0001"]

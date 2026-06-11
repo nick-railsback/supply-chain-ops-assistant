@@ -9,6 +9,7 @@ Provides the full action pipeline:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
@@ -153,6 +154,47 @@ def _apply_risk_floor(
     return risk, confirm or claimed_confirm
 
 
+# Explicit entity ids in a query (e.g. "escalate order ORD-2025-0001").
+_ENTITY_ID_PATTERN = re.compile(r"\b(?:ORD|EXC|SHP)-[A-Za-z0-9-]+\b")
+
+# The id field each action's entity carries in context rows.
+_ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
+    ActionType.UPDATE_ORDER_STATUS: ("order_id",),
+    ActionType.ESCALATE_ORDER: ("order_id",),
+    ActionType.UPDATE_EXCEPTION: ("exception_id",),
+    ActionType.ASSIGN_EXCEPTION: ("exception_id",),
+    ActionType.FLAG_SHIPMENTS: ("shipment_id",),
+    ActionType.BULK_UPDATE: ("id", "order_id", "exception_id", "shipment_id"),
+}
+
+
+def _fallback_target_ids(
+    user_query: str,
+    relevant_data: list[dict[str, Any]],
+    action_type: ActionType,
+) -> list[str]:
+    """Pick the rule path's targets without fanning out across the context.
+
+    Ids named explicitly in the query win, intersected with the context so a
+    typo can't target an unfetched row. Otherwise only rows carrying the id
+    field of the action's entity become targets — a context of mixed entities
+    never all becomes targets of a single action.
+    """
+    id_fields = _ACTION_ID_FIELDS[action_type]
+    context_ids: list[str] = []
+    for row in relevant_data:
+        for id_field in id_fields:
+            if id_field in row:
+                context_ids.append(str(row[id_field]))
+                break
+
+    explicit = _ENTITY_ID_PATTERN.findall(user_query)
+    if explicit:
+        context_set = set(context_ids)
+        return [eid for eid in explicit if eid in context_set]
+    return context_ids
+
+
 def _status_by_target(relevant_data: list[dict[str, Any]]) -> dict[str, str]:
     """Map each context row's entity id to its current status.
 
@@ -211,18 +253,22 @@ async def propose_action(
     # Try LLM-based proposal generation, routed through the shared structured
     # client (forced tool-use + guaranteed client teardown — see agent/llm.py).
     if settings.is_llm_available:
-        try:
-            import json
+        import json
 
-            prompt = PROPOSE_ACTION_USER.format(
-                user_query=user_query,
-                relevant_data=json.dumps(relevant_data, default=str),
-            )
-            schema = ActionProposal.model_json_schema()
-            # The model grades its own risk_level / requires_confirmation —
-            # merged below with the server floor, raise-only. The validator-only
-            # current_statuses ground truth must never come from the model.
-            schema.get("properties", {}).pop("current_statuses", None)
+        prompt = PROPOSE_ACTION_USER.format(
+            user_query=user_query,
+            relevant_data=json.dumps(relevant_data, default=str),
+        )
+        schema = ActionProposal.model_json_schema()
+        # The model grades its own risk_level / requires_confirmation —
+        # merged below with the server floor, raise-only. The validator-only
+        # current_statuses ground truth must never come from the model.
+        schema.get("properties", {}).pop("current_statuses", None)
+        # Only the call itself may degrade to the rule path: a proposal the
+        # validator rejects must surface to the operator as an error, never
+        # silently become a different proposal.
+        data: dict[str, Any] | None = None
+        try:
             data, usage = await structured_call(
                 system=PROPOSE_ACTION_SYSTEM_PROMPT,
                 user=prompt,
@@ -231,6 +277,12 @@ async def propose_action(
                 input_schema=schema,
             )
             logger.debug("propose_action usage=%s", usage)
+        except LLMUnavailable:
+            pass  # fall through to the rule-based path
+        except Exception as exc:
+            logger.warning("LLM action proposal failed, falling back to rule-based: %s", exc)
+
+        if data is not None:
             # The model's risk claims are advisory: recompute server-side and
             # let the claim raise risk/confirmation, never lower them (SEC-1).
             claimed_risk = data.pop("risk_level", None)
@@ -263,21 +315,10 @@ async def propose_action(
             if errors:
                 raise ValueError(f"Action validation failed: {'; '.join(errors)}")
             return proposal
-        except LLMUnavailable:
-            pass  # fall through to the rule-based path
-        except Exception as exc:
-            logger.warning("LLM action proposal failed, falling back to rule-based: %s", exc)
 
     # Rule-based fallback
     action_type = _detect_action_type(user_query)
-
-    # Extract target IDs — look in each data row for common ID fields
-    target_ids: list[str] = []
-    for row in relevant_data:
-        for id_field in ("id", "order_id", "exception_id", "shipment_id"):
-            if id_field in row:
-                target_ids.append(str(row[id_field]))
-                break
+    target_ids = _fallback_target_ids(user_query, relevant_data, action_type)
 
     # Extract changes from the first data row or build from query context
     changes: dict[str, Any] = {}
