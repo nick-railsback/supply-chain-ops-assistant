@@ -20,10 +20,10 @@ from config.prompts import (
     EXECUTE_AND_FLAG_RESPONSE,
 )
 from config.settings import get_settings
-from models.action import ActionProposal
+from models.action import ActionProposal, ActionResult
 from models.query import DataFilter, QueryPlan, QueryResult
 from models.report import ReportOutput
-from models.shared import TargetSystem
+from models.shared import TargetSystem, UserIntent
 from services.client import OpsClient
 
 logger = logging.getLogger(__name__)
@@ -89,8 +89,12 @@ class Copilot:
         """Full pipeline: interpret -> route -> validate -> execute.
 
         Returns a dict with keys:
-          - ``status``: one of "success", "partial", "clarify", "flagged", "error"
+          - ``status``: one of "success", "partial", "report",
+            "action_proposed", "clarify", "flagged", "error"
           - ``data``: the query result payload (when executed)
+          - ``report``: a ReportOutput when status is "report", else None
+          - ``proposal``: an ActionProposal when status is "action_proposed",
+            else None
           - ``plan``: the interpreted QueryPlan
           - ``routing``: the RoutingDecision value
           - ``message``: human-readable response string
@@ -116,6 +120,8 @@ class Copilot:
                 "routing": decision.value,
                 "message": message,
                 "data": None,
+                "report": None,
+                "proposal": None,
                 "errors": [],
             }
 
@@ -130,10 +136,59 @@ class Copilot:
                 "routing": decision.value,
                 "message": msg,
                 "data": None,
+                "report": None,
+                "proposal": None,
                 "errors": errors,
             }
 
-        # 5. Execute
+        # 5. Intent dispatch
+        if plan.intent is UserIntent.REPORT:
+            from agent.report_generator import generate_report
+
+            report = await generate_report(self.client, user_query)
+            self._update_history("assistant", f"generated report: {report.title}")
+            return {
+                "status": "report",
+                "plan": plan,
+                "routing": decision.value,
+                "message": f"Report generated: {report.title}",
+                "data": None,
+                "report": report,
+                "proposal": None,
+                "errors": [],
+            }
+
+        if plan.intent is UserIntent.ACTION_REQUEST:
+            from agent.action_handler import propose_action
+
+            context = await execute_query(self.client, plan)  # rows the action targets
+            try:
+                proposal = await propose_action(self.client, user_query, context.data)
+            except ValueError as exc:
+                msg = str(exc)
+                self._update_history("assistant", msg)
+                return {
+                    "status": "error",
+                    "plan": plan,
+                    "routing": decision.value,
+                    "message": msg,
+                    "data": context.model_dump(),
+                    "report": None,
+                    "proposal": None,
+                    "errors": [msg],
+                }
+            self._update_history("assistant", _summarize_plan(plan))
+            return {
+                "status": "action_proposed",
+                "plan": plan,
+                "routing": decision.value,
+                "message": proposal.impact_summary,
+                "data": context.model_dump(),
+                "report": None,
+                "proposal": proposal,
+                "errors": [],
+            }
+
         result = await execute_query(self.client, plan)
 
         # 6. Build response
@@ -161,8 +216,22 @@ class Copilot:
             "routing": decision.value,
             "message": message,
             "data": result.model_dump(),
+            "report": None,
+            "proposal": None,
             "errors": [],
         }
+
+    async def execute_confirmed_action(
+        self, proposal: ActionProposal, *, confirmed: bool
+    ) -> ActionResult:
+        """Execute a proposal whose confirmation decision was made by the caller.
+
+        Never prompts and never defaults to yes — ``execute_action``'s gate
+        raises ``ActionNotConfirmedError`` if an unconfirmed proposal slips in.
+        """
+        from agent.action_handler import execute_action
+
+        return await execute_action(self.client, proposal, confirmed=confirmed)
 
     # ------------------------------------------------------------------
     # Action processing

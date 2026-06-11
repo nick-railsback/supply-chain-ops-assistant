@@ -154,10 +154,9 @@ Please reply with the option number or rephrase your request.\
 
 # --- Execute-and-flag response template ---
 EXECUTE_AND_FLAG_RESPONSE = """\
-Here is what I understood from your request:
+Heads up — I wasn't fully confident, so double-check my interpretation:
 
 {interpretation}
 
-If this looks correct, confirm and I will proceed. Otherwise, let me know \
-what to adjust.\
+I ran it anyway. If that's not what you meant, rephrase and I'll try again.\
 """

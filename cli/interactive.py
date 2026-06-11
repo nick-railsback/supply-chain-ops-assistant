@@ -694,6 +694,31 @@ class InteractiveCLI:
         if status == "flagged":
             self.console.print(f"[yellow]\u26a0 {message}[/yellow]")
 
+        if status == "report" and result.get("report") is not None:
+            self.console.print(render_report(result["report"]))
+            return
+
+        if status == "action_proposed" and result.get("proposal") is not None:
+            proposal = result["proposal"]
+            if proposal.requires_confirmation:
+                confirmed = await prompt_confirmation(proposal)
+                if not confirmed:
+                    self.console.print(
+                        "[yellow]Action cancelled \u2014 nothing was changed.[/yellow]"
+                    )
+                    return
+            else:
+                self.console.print(display_action_proposal(proposal))
+                self.console.print("[dim]Low risk \u2014 proceeding without confirmation.[/dim]")
+            action_result = await self.copilot.execute_confirmed_action(proposal, confirmed=True)
+            self.console.print(
+                f"[green]\u2713 {len(action_result.successful)}/{action_result.total_targets} "
+                f"succeeded[/green] ({action_result.execution_time_ms:.0f}ms)"
+            )
+            for failure in action_result.failed:
+                self.console.print(f"[red]\u2717 {failure['id']}: {failure['error']}[/red]")
+            return
+
         # Format and display the data
         data = result.get("data")
         if data and data.get("partial_failure"):
