@@ -51,6 +51,36 @@ FIELD_REGISTRY: dict[tuple[str, str, str], str] = {
 }
 
 # ---------------------------------------------------------------------------
+# Dispatchable filters: what agent.copilot._dispatch_single_system actually
+# executes, and the only operator semantics it honors. _extract_filters
+# ignores DataFilter.operator entirely, so any pair not listed here would be
+# silently mis-executed. Update in lockstep with the dispatcher.
+# ---------------------------------------------------------------------------
+DISPATCHABLE_OPERATORS: dict[tuple[str, str, str], frozenset[str]] = {
+    ("oms", "order", "at_risk"): frozenset({"eq"}),
+    ("oms", "order", "status"): frozenset({"eq"}),
+    ("oms", "order", "channel"): frozenset({"eq"}),
+    ("oms", "order", "customer_tier"): frozenset({"eq"}),
+    ("oms", "order", "date_range_start"): frozenset({"gte"}),
+    ("oms", "order", "date_range_end"): frozenset({"lte"}),
+    ("oms", "order", "order_value"): frozenset({"gte"}),  # dispatcher maps to min_value
+    ("oms", "exception", "exception_type"): frozenset({"eq"}),
+    ("oms", "exception", "severity"): frozenset({"eq"}),
+    ("oms", "exception", "status"): frozenset({"eq"}),
+    ("oms", "exception", "date_from"): frozenset({"gte"}),
+    ("oms", "exception", "date_to"): frozenset({"lte"}),
+    ("wms", "inventory", "below_reorder_point"): frozenset({"eq"}),
+    ("wms", "inventory", "sku"): frozenset({"eq"}),
+    ("wms", "inventory", "fulfillment_center"): frozenset({"eq"}),
+    ("wms", "inventory", "category"): frozenset({"eq"}),
+    ("tms", "shipment", "sla_status"): frozenset({"eq"}),
+    ("tms", "shipment", "carrier"): frozenset({"eq"}),
+    ("tms", "shipment", "shipment_status"): frozenset({"eq"}),
+    ("tms", "shipment", "date_range_start"): frozenset({"gte"}),
+    ("tms", "shipment", "date_range_end"): frozenset({"lte"}),
+}
+
+# ---------------------------------------------------------------------------
 # Valid operators per field type
 # ---------------------------------------------------------------------------
 
@@ -117,6 +147,32 @@ async def validate_query_plan(plan: QueryPlan) -> list[str]:
                         f"'{f.field}' (type={field_type}). "
                         f"Valid operators: {valid_ops}"
                     )
+                else:
+                    # Type-valid is not enough: the dispatcher executes only a
+                    # subset of fields and ignores the operator, so reject pairs
+                    # it would silently mis-run (e.g. order_value lt -> min_value).
+                    allowed = next(
+                        (
+                            ops
+                            for (sys_, _entity, fld), ops in DISPATCHABLE_OPERATORS.items()
+                            if sys_ == system.value and fld == f.field
+                        ),
+                        None,
+                    )
+                    if allowed is None:
+                        executable = sorted(
+                            {fld for (s, _e, fld) in DISPATCHABLE_OPERATORS if s == system.value}
+                        )
+                        errors.append(
+                            f"Filter field '{f.field}' is recognized but cannot be executed "
+                            f"by the query dispatcher yet. Executable {system.value} fields: "
+                            f"{executable}"
+                        )
+                    elif f.operator not in allowed:
+                        errors.append(
+                            f"Operator '{f.operator}' on '{f.field}' is not executable; "
+                            f"only {sorted(allowed)} is supported for this field."
+                        )
                 break
 
         if not matched and plan.target_systems:

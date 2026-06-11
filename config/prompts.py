@@ -23,18 +23,18 @@ queries into a structured query plan by calling the `emit_query_plan` tool.
   clarification_needed  – query is too ambiguous to act on; return empty
                           target_systems and no filters
 
-# Filter fields per system (use only these; pick operators the field supports)
+# Filter fields per system (use only these; the dispatcher executes exactly
+# these pairs and ignores any other field or operator)
   oms (orders):
-    status, channel, customer_tier, order_date, date_range_start,
-    date_range_end, order_value, priority
+    status, channel, customer_tier, date_range_start (gte), date_range_end (lte),
+    order_value (gte — minimum value), at_risk (eq true)
   oms (exceptions):
-    exception_type, severity, status, date_from, date_to
+    exception_type, severity, status, date_from (gte), date_to (lte)
   wms (inventory):
-    sku, category, fulfillment_center, quantity_available, low_stock_flag,
-    reorder_point, below_reorder_point
+    sku, category, fulfillment_center, below_reorder_point (eq true)
   tms (shipments):
-    carrier, shipment_status, sla_status, ship_date, delivery_date,
-    date_range_start, date_range_end, tracking_number
+    carrier, shipment_status, sla_status, date_range_start (gte), date_range_end (lte)
+  Use operator eq unless a field notes otherwise.
 
 # Confidence signals (drive a calibrated confidence score — be honest)
   single_clear_intent      – the query maps to exactly one intent, not several.

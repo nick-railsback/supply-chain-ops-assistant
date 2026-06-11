@@ -148,6 +148,55 @@ class TestValidation:
         errors = await validate_query_plan(plan)
         assert errors == []
 
+    async def test_unmapped_field_rejected(self, sample_query_plan):
+        """A field the registry knows but the dispatcher never executes (priority)
+        is rejected, not silently dropped."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="priority", operator="eq", value="urgent")],
+        )
+        errors = await validate_query_plan(plan)
+        assert any("cannot be executed" in e for e in errors)
+
+    async def test_unexecutable_operator_rejected(self, sample_query_plan):
+        """status passes the type check for 'in', but the dispatcher only honors
+        'eq', so 'in' must be rejected."""
+        plan = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="status", operator="in", value=["pending", "processing"])],
+        )
+        errors = await validate_query_plan(plan)
+        assert any("not executable" in e for e in errors)
+
+    async def test_order_value_gte_accepted_eq_rejected(self, sample_query_plan):
+        """order_value dispatches as min_value (a >= floor); only gte is honest."""
+        ok = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="order_value", operator="gte", value=100)],
+        )
+        bad = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[DataFilter(field="order_value", operator="eq", value=100)],
+        )
+        assert await validate_query_plan(ok) == []
+        assert await validate_query_plan(bad) != []
+
+    async def test_dispatchable_eq_filters_still_pass(self, sample_query_plan):
+        """The shortcut/eq filters the dispatcher really executes still validate."""
+        oms = sample_query_plan(
+            target_systems=[TargetSystem.OMS],
+            filters=[
+                DataFilter(field="severity", operator="eq", value="critical"),
+                DataFilter(field="at_risk", operator="eq", value=True),
+            ],
+        )
+        tms = sample_query_plan(
+            target_systems=[TargetSystem.TMS],
+            filters=[DataFilter(field="sla_status", operator="eq", value="breached")],
+        )
+        assert await validate_query_plan(oms) == []
+        assert await validate_query_plan(tms) == []
+
 
 class TestPydanticModels:
     def test_query_plan_confidence_bounds(self):
