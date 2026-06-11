@@ -118,7 +118,9 @@ _PATTERNS: list[tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list
     # --- Orders ---
     # Specific order patterns must precede the generic "show ... orders" pattern:
     # _rule_based_interpret is first-match-wins, so a generic match would shadow
-    # the filtered ones and silently drop the at_risk filter.
+    # the filtered ones and silently drop their filter. The same shadowing rule
+    # applies below: the severity patterns precede the generic "show ...
+    # exceptions" pattern for exactly this reason.
     (
         re.compile(r"\bat[- ]?risk\b.*\borders?\b|\borders?\b.*\bat[- ]?risk\b", re.IGNORECASE),
         UserIntent.STATUS_CHECK,
@@ -127,20 +129,33 @@ _PATTERNS: list[tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list
         [DataFilter(field="at_risk", operator="eq", value=True)],
     ),
     (
-        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
-        UserIntent.STATUS_CHECK,
-        [TargetSystem.OMS],
-        "order",
-        [],
-    ),
-    (
         re.compile(r"\bpending\b.*\borders?\b|\borders?\b.*\bpending\b", re.IGNORECASE),
         UserIntent.STATUS_CHECK,
         [TargetSystem.OMS],
         "order",
         [DataFilter(field="status", operator="eq", value="pending")],
     ),
+    (
+        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "order",
+        [],
+    ),
     # --- Exceptions ---
+    *[
+        (
+            re.compile(
+                rf"\b{sev.value}\b.*\bexceptions?\b|\bexceptions?\b.*\b{sev.value}\b",
+                re.IGNORECASE,
+            ),
+            UserIntent.STATUS_CHECK,
+            [TargetSystem.OMS],
+            "exception",
+            [DataFilter(field="severity", operator="eq", value=sev.value)],
+        )
+        for sev in Severity
+    ],
     (
         re.compile(
             r"\b(?:show|list|get|find|display)\b.*\bexceptions?\b",

@@ -298,3 +298,46 @@ class TestProposeActionRiskFloor:
         for field in ("risk_level", "requires_confirmation", "current_status"):
             assert field not in properties, field
         assert "risk_level" not in schema.get("required", [])
+
+
+class TestProposeActionLLMCurrentStatus:
+    """The LLM status-update path must inject current_status from context, the
+    same way the rule path does, so the proposal can pass transition validation
+    instead of silently burning a call and falling back (REL-2)."""
+
+    async def test_llm_path_injects_current_status_from_context(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "update_order_status",
+            "target_ids": ["ORD-2025-001"],
+            "changes": {"status": "processing"},
+            "reasoning": "advance order",
+            "impact_summary": "1 order",
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        relevant_data = [{"order_id": "ORD-2025-001", "status": "pending"}]
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(
+                None, "update order status to processing", relevant_data
+            )
+
+        assert proposal.current_status == "pending"
+        assert await validate_action_proposal(proposal) == []
+
+    async def test_llm_path_invalid_transition_falls_back(self, monkeypatch):
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        tool_input = {
+            "action_type": "update_order_status",
+            "target_ids": ["ORD-2025-001"],
+            "changes": {"status": "delivered"},
+            "reasoning": "LLM reasoning",
+            "impact_summary": "1 order",
+        }
+        call = AsyncMock(return_value=(tool_input, {"input_tokens": 1, "output_tokens": 1}))
+        relevant_data = [{"order_id": "ORD-2025-001", "status": "pending"}]
+        with patch("agent.action_handler.structured_call", call):
+            proposal = await propose_action(None, "mark order delivered", relevant_data)
+
+        # pending -> delivered is invalid, so the LLM proposal fails validation
+        # and the rule path takes over (its reasoning is query-derived).
+        assert proposal.reasoning.startswith("Action requested via:")

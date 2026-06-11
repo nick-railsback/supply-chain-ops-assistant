@@ -8,6 +8,11 @@ from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
 
+# Keys that mean "no usable key": the bare default plus the placeholders shipped
+# in .env.example. Without this, a copied .env.example makes is_llm_available
+# true, so every query fires a doomed API call before degrading to the rule path.
+_PLACEHOLDER_API_KEYS = frozenset({"not-set", "", "your-api-key-here"})
+
 
 class ConfidenceThreshold(BaseModel):
     auto: float
@@ -69,11 +74,11 @@ class Settings(BaseSettings):
 
     @property
     def is_llm_available(self) -> bool:
-        return self.llm_enabled and self.anthropic_api_key != "not-set"
+        return self.llm_enabled and self.anthropic_api_key not in _PLACEHOLDER_API_KEYS
 
     @model_validator(mode="after")
     def _check_api_key(self) -> "Settings":
-        if self.llm_enabled and self.anthropic_api_key == "not-set":
+        if self.llm_enabled and self.anthropic_api_key in _PLACEHOLDER_API_KEYS:
             logger.warning("ANTHROPIC_API_KEY is not set. LLM features will be unavailable.")
         return self
 

@@ -185,6 +185,20 @@ async def propose_action(
             data["risk_level"] = computed
             confirm_floor = computed != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX
             data["requires_confirmation"] = confirm_floor or claimed_confirm
+            # Mirror the rule path: the transition validator needs the order's
+            # current status, which the model must never supply itself.
+            data.pop("current_status", None)
+            if (
+                data.get("action_type") == ActionType.UPDATE_ORDER_STATUS.value
+                and data.get("changes", {}).get("status")
+                and relevant_data
+            ):
+                wanted_ids = set(map(str, data.get("target_ids", [])))
+                row = next(
+                    (r for r in relevant_data if str(r.get("order_id", "")) in wanted_ids),
+                    relevant_data[0],
+                )
+                data["current_status"] = row.get("status")
             proposal = ActionProposal.model_validate(data)
             errors = await validate_action_proposal(proposal)
             if errors:
