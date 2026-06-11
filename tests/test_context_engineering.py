@@ -14,9 +14,11 @@ from unittest.mock import AsyncMock, patch
 from agent.copilot import Copilot
 from agent.query_interpreter import (
     INTERPRET_SYSTEM_PROMPT,
+    _dispatchable_filter_reference,
     _field_value_reference,
     _summarize_plan,
 )
+from agent.validators import DISPATCHABLE_OPERATORS, FIELD_REGISTRY
 from models.query import DataFilter, QueryPlan, QueryResult
 from models.shared import TargetSystem, UserIntent
 
@@ -44,6 +46,57 @@ def test_system_prompt_maps_exceptions_to_oms():
 def test_system_prompt_embeds_value_reference():
     """The assembled system prompt carries the live enum-value block."""
     assert _field_value_reference() in INTERPRET_SYSTEM_PROMPT
+
+
+def test_filter_reference_derived_from_registry():
+    """Every dispatchable (system, entity, field) appears in the rendered
+    block under its system/entity heading — the prompt can't drift from what
+    the dispatcher executes."""
+    plural = {
+        "order": "orders",
+        "exception": "exceptions",
+        "inventory": "inventory",
+        "shipment": "shipments",
+    }
+    sections: dict[str, str] = {}
+    heading = None
+    for line in _dispatchable_filter_reference().splitlines():
+        stripped = line.strip()
+        if stripped.endswith("):"):
+            heading = stripped[:-2]  # e.g. "oms (orders"
+            sections[heading] = ""
+        elif heading and not stripped.startswith("#"):
+            sections[heading] += stripped
+
+    for system, entity, field in DISPATCHABLE_OPERATORS:
+        key = f"{system} ({plural[entity]}"
+        assert key in sections, key
+        assert field in sections[key], (system, entity, field)
+
+
+def test_filter_reference_excludes_undispatchable_fields():
+    """A field the registry knows but the dispatcher never executes must not
+    be advertised to the model (order_date and priority validate as known
+    fields but have no dispatch branch)."""
+    block = _dispatchable_filter_reference()
+    undispatchable = set(FIELD_REGISTRY) - set(DISPATCHABLE_OPERATORS)
+    assert ("oms", "order", "order_date") in undispatchable  # guard the premise
+    assert "order_date" not in block
+    assert "priority" not in block
+
+
+def test_filter_reference_annotates_operators():
+    """Non-eq operators and true-only booleans keep their annotations."""
+    block = _dispatchable_filter_reference()
+    assert "date_range_start (gte)" in block
+    assert "at_risk (eq true)" in block
+    assert "below_reorder_point (eq true)" in block
+
+
+def test_system_prompt_embeds_filter_reference():
+    assert _dispatchable_filter_reference() in INTERPRET_SYSTEM_PROMPT
+    # No unformatted placeholder survives composition.
+    assert "{filter_fields}" not in INTERPRET_SYSTEM_PROMPT
 
 
 def test_summarize_plan_with_filters():

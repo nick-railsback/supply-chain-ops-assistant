@@ -23,7 +23,11 @@ import re
 import time
 
 from agent.llm import LLMUnavailable, structured_call
-from agent.validators import validate_query_plan
+from agent.validators import (
+    _TRUE_ONLY_BOOLEAN_FIELDS,
+    DISPATCHABLE_OPERATORS,
+    validate_query_plan,
+)
 from config.prompts import INTERPRET_QUERY_SYSTEM, INTERPRET_QUERY_USER
 from models.oms import ExceptionStatus, ExceptionType, OrderChannel, OrderStatus
 from models.query import ConfidenceSignals, DataFilter, QueryPlan
@@ -73,8 +77,48 @@ def _field_value_reference() -> str:
     )
 
 
-# The interpreter system prompt = static domain knowledge + live value domains.
-INTERPRET_SYSTEM_PROMPT = INTERPRET_QUERY_SYSTEM + "\n" + _field_value_reference()
+def _dispatchable_filter_reference() -> str:
+    """Render the filter-fields-per-system block from ``DISPATCHABLE_OPERATORS``
+    — the registry of exactly what the dispatcher executes — so the prompt
+    can't drift from the validator and dispatcher.
+
+    Built once at import (see ``INTERPRET_SYSTEM_PROMPT``); the string is
+    stable, so the system-prompt block still hits the prompt cache.
+    """
+    plural = {
+        "order": "orders",
+        "exception": "exceptions",
+        "inventory": "inventory",
+        "shipment": "shipments",
+    }
+    groups: dict[tuple[str, str], list[str]] = {}
+    for (system, entity, field), ops in sorted(DISPATCHABLE_OPERATORS.items()):
+        if (system, entity, field) in _TRUE_ONLY_BOOLEAN_FIELDS:
+            label = f"{field} (eq true)"
+        elif notes := sorted(ops - {"eq"}):
+            label = f"{field} ({', '.join(notes)})"
+        else:
+            label = field
+        groups.setdefault((system, entity), []).append(label)
+
+    lines = [
+        "# Filter fields per system (use only these; the dispatcher executes exactly",
+        "# these pairs and ignores any other field or operator)",
+    ]
+    for (system, entity), labels in groups.items():
+        lines.append(f"  {system} ({plural.get(entity, entity)}):")
+        lines.append("    " + ", ".join(labels))
+    lines.append("  Use operator eq unless a field notes otherwise.")
+    return "\n".join(lines)
+
+
+# The interpreter system prompt = static domain knowledge with the dispatchable
+# filter fields rendered in place, plus the live value domains.
+INTERPRET_SYSTEM_PROMPT = (
+    INTERPRET_QUERY_SYSTEM.format(filter_fields=_dispatchable_filter_reference())
+    + "\n"
+    + _field_value_reference()
+)
 
 # ---------------------------------------------------------------------------
 # Prompt builder
