@@ -16,7 +16,12 @@ async def test_structured_call_closes_client():
     block = ToolUseBlock(type="tool_use", id="t1", name="emit", input={"ok": True})
     message = MagicMock()
     message.content = [block]
-    message.usage = MagicMock(input_tokens=10, output_tokens=5)
+    message.usage = MagicMock(
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
 
     client = AsyncMock()
     client.messages.create = AsyncMock(return_value=message)
@@ -31,7 +36,12 @@ async def test_structured_call_closes_client():
         )
 
     assert data == {"ok": True}
-    assert usage == {"input_tokens": 10, "output_tokens": 5}
+    assert usage == {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
     client.close.assert_awaited_once()
 
 
@@ -39,7 +49,12 @@ async def test_structured_call_closes_client_on_error():
     """The client is closed even when no matching tool_use block comes back."""
     message = MagicMock()
     message.content = []  # no tool_use block -> structured_call raises
-    message.usage = MagicMock(input_tokens=1, output_tokens=1)
+    message.usage = MagicMock(
+        input_tokens=1,
+        output_tokens=1,
+        cache_read_input_tokens=0,
+        cache_creation_input_tokens=0,
+    )
 
     client = AsyncMock()
     client.messages.create = AsyncMock(return_value=message)
@@ -59,3 +74,32 @@ async def test_structured_call_closes_client_on_error():
 
     assert raised
     client.close.assert_awaited_once()
+
+
+async def test_structured_call_reports_cache_counters():
+    """Cache read/creation counters from the API usage flow into the returned
+    usage dict, so per-call cache effectiveness is observable."""
+    block = ToolUseBlock(type="tool_use", id="t1", name="emit", input={"ok": True})
+    message = MagicMock()
+    message.content = [block]
+    message.usage = MagicMock(
+        input_tokens=10,
+        output_tokens=5,
+        cache_read_input_tokens=1200,
+        cache_creation_input_tokens=0,
+    )
+
+    client = AsyncMock()
+    client.messages.create = AsyncMock(return_value=message)
+
+    with patch("agent.llm._client", return_value=client):
+        _data, usage = await structured_call(
+            system="s",
+            user="u",
+            tool_name="emit",
+            tool_description="d",
+            input_schema={"type": "object"},
+        )
+
+    assert usage["cache_read_input_tokens"] == 1200
+    assert usage["cache_creation_input_tokens"] == 0

@@ -20,16 +20,56 @@ from config.prompts import (
     EXECUTE_AND_FLAG_RESPONSE,
 )
 from config.settings import get_settings
-from models.action import ActionProposal
+from models.action import ActionProposal, ActionResult
 from models.query import DataFilter, QueryPlan, QueryResult
 from models.report import ReportOutput
-from models.shared import TargetSystem
+from models.shared import TargetSystem, UserIntent
 from services.client import OpsClient
 
 logger = logging.getLogger(__name__)
 
 # Max conversation turns retained
 _MAX_HISTORY = 5
+
+
+def _name_failed_systems(error_details: dict[str, str]) -> str:
+    """Render per-system failures for a human: 'TMS did not respond (boom).'"""
+    return (
+        "; ".join(
+            f"{system.upper()} did not respond ({err})"
+            for system, err in sorted(error_details.items())
+        )
+        + "."
+    )
+
+
+def _envelope(
+    status: str,
+    plan: QueryPlan,
+    decision: RoutingDecision,
+    message: str,
+    *,
+    data: dict[str, Any] | None = None,
+    report: ReportOutput | None = None,
+    proposal: ActionProposal | None = None,
+    errors: list[str] | None = None,
+) -> dict[str, Any]:
+    """The one response shape every ``process_query`` return takes
+    (documented in its docstring)."""
+    return {
+        "status": status,
+        "plan": plan,
+        "routing": decision.value,
+        "message": message,
+        "data": data,
+        "report": report,
+        "proposal": proposal,
+        "errors": errors or [],
+        # Carried on every envelope, not just the read path's 'flagged'
+        # status: reports and proposals built from a flag-band interpretation
+        # must reach the CLI with the warning intact.
+        "flagged": decision == RoutingDecision.EXECUTE_AND_FLAG,
+    }
 
 
 # ===================================================================
@@ -89,13 +129,25 @@ class Copilot:
         """Full pipeline: interpret -> route -> validate -> execute.
 
         Returns a dict with keys:
-          - ``status``: one of "success", "clarify", "flagged", "error"
+          - ``status``: one of "success", "partial", "report",
+            "action_proposed", "clarify", "flagged", "error"
           - ``data``: the query result payload (when executed)
+          - ``report``: a ReportOutput when status is "report", else None
+          - ``proposal``: an ActionProposal when status is "action_proposed",
+            else None
           - ``plan``: the interpreted QueryPlan
           - ``routing``: the RoutingDecision value
           - ``message``: human-readable response string
           - ``errors``: validation error list (if any)
+          - ``flagged``: True when the interpretation routed EXECUTE_AND_FLAG
+            (low confidence) — set for every status, so report and action
+            envelopes carry the warning too
         """
+        from config.logging import new_trace
+
+        # One trace per turn: OpsClient._trace_headers propagates X-Trace-ID and
+        # TraceMiddleware echoes it, so a cross-system turn shares one trace id.
+        new_trace()
         self._update_history("user", user_query)
 
         # 1. Interpret
@@ -110,36 +162,93 @@ class Copilot:
             options_text = "\n".join(f"  - {s}" for s in suggestions)
             message = CLARIFICATION_RESPONSE.format(options=options_text)
             self._update_history("assistant", message)
-            return {
-                "status": "clarify",
-                "plan": plan,
-                "routing": decision.value,
-                "message": message,
-                "data": None,
-                "errors": [],
-            }
+            return _envelope("clarify", plan, decision, message)
 
         # 4. Validate
         errors = await validate_query_plan(plan)
         if errors:
             msg = "Validation failed: " + "; ".join(errors)
             self._update_history("assistant", msg)
-            return {
-                "status": "error",
-                "plan": plan,
-                "routing": decision.value,
-                "message": msg,
-                "data": None,
-                "errors": errors,
-            }
+            return _envelope("error", plan, decision, msg, errors=errors)
 
-        # 5. Execute
+        # 5. Intent dispatch
+        if plan.intent is UserIntent.REPORT:
+            from agent.report_generator import ReportDataUnavailable, generate_report
+
+            try:
+                report = await generate_report(self.client, user_query)
+            except ReportDataUnavailable as exc:
+                msg = "Report unavailable: " + _name_failed_systems(exc.error_details)
+                self._update_history("assistant", msg)
+                return _envelope("error", plan, decision, msg, errors=[msg])
+            self._update_history("assistant", f"generated report: {report.title}")
+            return _envelope(
+                "report",
+                plan,
+                decision,
+                f"Report generated: {report.title}",
+                report=report,
+            )
+
+        if plan.intent is UserIntent.ACTION_REQUEST:
+            from agent.action_handler import propose_action
+
+            context = await execute_query(self.client, plan)  # rows the action targets
+            if context.partial_failure:
+                # Never propose a mutation from silently incomplete data: a
+                # proposal over the surviving subset reads as covering
+                # everything the operator asked about.
+                msg = (
+                    "Cannot propose an action on incomplete data: "
+                    + _name_failed_systems(context.error_details or {})
+                    + " Re-run when all systems are reachable."
+                )
+                self._update_history("assistant", msg)
+                return _envelope(
+                    "error",
+                    plan,
+                    decision,
+                    msg,
+                    data=context.model_dump(),
+                    errors=[msg],
+                )
+            try:
+                proposal = await propose_action(self.client, user_query, context.data)
+            except ValueError as exc:
+                msg = str(exc)
+                self._update_history("assistant", msg)
+                return _envelope(
+                    "error",
+                    plan,
+                    decision,
+                    msg,
+                    data=context.model_dump(),
+                    errors=[msg],
+                )
+            self._update_history("assistant", _summarize_plan(plan))
+            return _envelope(
+                "action_proposed",
+                plan,
+                decision,
+                proposal.impact_summary,
+                data=context.model_dump(),
+                proposal=proposal,
+            )
+
         result = await execute_query(self.client, plan)
 
         # 6. Build response
         if decision == RoutingDecision.EXECUTE_AND_FLAG:
             message = EXECUTE_AND_FLAG_RESPONSE.format(interpretation=plan.reasoning)
             status = "flagged"
+        elif result.partial_failure:
+            failed = ", ".join(sorted((result.error_details or {}).keys()))
+            ok = len(result.systems_queried) - len(result.error_details or {})
+            message = (
+                f"Partial results: {result.total_count} result(s) from {ok} of "
+                f"{len(result.systems_queried)} system(s); {failed} did not respond."
+            )
+            status = "partial"
         else:
             message = f"Query executed successfully. {result.total_count} result(s) returned."
             status = "success"
@@ -147,46 +256,19 @@ class Copilot:
         # Record the interpretation (not the user-facing message) so the next
         # turn can resolve references like "those" / "the same ones".
         self._update_history("assistant", _summarize_plan(plan))
-        return {
-            "status": status,
-            "plan": plan,
-            "routing": decision.value,
-            "message": message,
-            "data": result.model_dump(),
-            "errors": [],
-        }
+        return _envelope(status, plan, decision, message, data=result.model_dump())
 
-    # ------------------------------------------------------------------
-    # Action processing
-    # ------------------------------------------------------------------
+    async def execute_confirmed_action(
+        self, proposal: ActionProposal, *, confirmed: bool
+    ) -> ActionResult:
+        """Execute a proposal whose confirmation decision was made by the caller.
 
-    async def process_action(
-        self, user_query: str, relevant_data: dict[str, Any]
-    ) -> ActionProposal:
-        """Produce an ActionProposal from a user request and context data.
-
-        Delegates to ``propose_action`` which tries LLM first, then falls
-        back to keyword-based detection.
+        Never prompts and never defaults to yes — ``execute_action``'s gate
+        raises ``ActionNotConfirmedError`` if an unconfirmed proposal slips in.
         """
-        from agent.action_handler import propose_action
+        from agent.action_handler import execute_action
 
-        # Convert dict to list of rows for propose_action
-        rows = relevant_data.get("items", [relevant_data])
-        return await propose_action(self.client, user_query, rows)
-
-    # ------------------------------------------------------------------
-    # Report generation
-    # ------------------------------------------------------------------
-
-    async def generate_report(self, report_request: str, data: dict[str, Any]) -> ReportOutput:
-        """Generate a structured report from a request and data payload.
-
-        Delegates to ``report_generator.generate_report`` which produces
-        rule-based reports with optional LLM narrative enrichment.
-        """
-        from agent.report_generator import generate_report
-
-        return await generate_report(self.client, report_request)
+        return await execute_action(self.client, proposal, confirmed=confirmed)
 
 
 # ===================================================================
@@ -216,8 +298,11 @@ async def _dispatch_single_system(
     effective_limit = limit or 50
 
     if system == TargetSystem.OMS:
-        # Check for special at_risk filter
-        if _extract_filters(filters, "at_risk"):
+        # Check for special at_risk filter. `is True` (not truthiness): the
+        # endpoint can only select the positive case, and validation rejects
+        # any other value — this guards against an unvalidated plan slipping
+        # a falsy value through and executing as "no filter at all".
+        if _extract_filters(filters, "at_risk") is True:
             oms_risk = await client.get_at_risk_orders(limit=effective_limit)
             return [item.model_dump() for item in oms_risk.items], oms_risk.total
 
@@ -245,8 +330,8 @@ async def _dispatch_single_system(
         return [item.model_dump() for item in oms_orders.items], oms_orders.total
 
     elif system == TargetSystem.WMS:
-        # Check for low-stock shortcut
-        if _extract_filters(filters, "below_reorder_point"):
+        # Check for low-stock shortcut (`is True` for the same reason as at_risk)
+        if _extract_filters(filters, "below_reorder_point") is True:
             wms_low = await client.get_low_stock(limit=effective_limit)
             return [item.model_dump() for item in wms_low.items], wms_low.total
 

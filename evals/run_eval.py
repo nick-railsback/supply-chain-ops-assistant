@@ -303,6 +303,18 @@ def main() -> None:
     ap.add_argument("--arm", choices=["rule", "llm", "both"], default="rule")
     ap.add_argument("--dataset", type=Path, default=DATASET)
     ap.add_argument("--verbose", action="store_true", help="print per-case failures")
+    ap.add_argument(
+        "--min-intent-accuracy",
+        type=float,
+        default=None,
+        help="exit 1 if any arm's intent accuracy is below this (CI regression gate)",
+    )
+    ap.add_argument(
+        "--min-systems-accuracy",
+        type=float,
+        default=None,
+        help="exit 1 if any arm's target-system accuracy is below this",
+    )
     args = ap.parse_args()
 
     dataset = [json.loads(line) for line in args.dataset.read_text().splitlines() if line.strip()]
@@ -355,6 +367,25 @@ def main() -> None:
         for name, a in arms.items()
     )
     console.print(f"[dim]Report written to {REPORT}. Headline → {head}[/dim]")
+
+    # Threshold gate: a CI regression guard, evaluated after the report writes.
+    breaches: list[str] = []
+    for name, a in arms.items():
+        m = metrics(a)
+        if args.min_intent_accuracy is not None and m["intent_acc"] < args.min_intent_accuracy:
+            breaches.append(
+                f"{name} arm intent accuracy {m['intent_acc']:.1%} "
+                f"< required {args.min_intent_accuracy:.1%}"
+            )
+        if args.min_systems_accuracy is not None and m["systems_acc"] < args.min_systems_accuracy:
+            breaches.append(
+                f"{name} arm systems accuracy {m['systems_acc']:.1%} "
+                f"< required {args.min_systems_accuracy:.1%}"
+            )
+    if breaches:
+        for b in breaches:
+            console.print(f"[red]threshold not met:[/red] {b}")
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

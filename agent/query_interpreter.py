@@ -23,7 +23,11 @@ import re
 import time
 
 from agent.llm import LLMUnavailable, structured_call
-from agent.validators import validate_query_plan
+from agent.validators import (
+    _TRUE_ONLY_BOOLEAN_FIELDS,
+    DISPATCHABLE_OPERATORS,
+    validate_query_plan,
+)
 from config.prompts import INTERPRET_QUERY_SYSTEM, INTERPRET_QUERY_USER
 from models.oms import ExceptionStatus, ExceptionType, OrderChannel, OrderStatus
 from models.query import ConfidenceSignals, DataFilter, QueryPlan
@@ -73,8 +77,48 @@ def _field_value_reference() -> str:
     )
 
 
-# The interpreter system prompt = static domain knowledge + live value domains.
-INTERPRET_SYSTEM_PROMPT = INTERPRET_QUERY_SYSTEM + "\n" + _field_value_reference()
+def _dispatchable_filter_reference() -> str:
+    """Render the filter-fields-per-system block from ``DISPATCHABLE_OPERATORS``
+    — the registry of exactly what the dispatcher executes — so the prompt
+    can't drift from the validator and dispatcher.
+
+    Built once at import (see ``INTERPRET_SYSTEM_PROMPT``); the string is
+    stable, so the system-prompt block still hits the prompt cache.
+    """
+    plural = {
+        "order": "orders",
+        "exception": "exceptions",
+        "inventory": "inventory",
+        "shipment": "shipments",
+    }
+    groups: dict[tuple[str, str], list[str]] = {}
+    for (system, entity, field), ops in sorted(DISPATCHABLE_OPERATORS.items()):
+        if (system, entity, field) in _TRUE_ONLY_BOOLEAN_FIELDS:
+            label = f"{field} (eq true)"
+        elif notes := sorted(ops - {"eq"}):
+            label = f"{field} ({', '.join(notes)})"
+        else:
+            label = field
+        groups.setdefault((system, entity), []).append(label)
+
+    lines = [
+        "# Filter fields per system (use only these; the dispatcher executes exactly",
+        "# these pairs and ignores any other field or operator)",
+    ]
+    for (system, entity), labels in groups.items():
+        lines.append(f"  {system} ({plural.get(entity, entity)}):")
+        lines.append("    " + ", ".join(labels))
+    lines.append("  Use operator eq unless a field notes otherwise.")
+    return "\n".join(lines)
+
+
+# The interpreter system prompt = static domain knowledge with the dispatchable
+# filter fields rendered in place, plus the live value domains.
+INTERPRET_SYSTEM_PROMPT = (
+    INTERPRET_QUERY_SYSTEM.format(filter_fields=_dispatchable_filter_reference())
+    + "\n"
+    + _field_value_reference()
+)
 
 # ---------------------------------------------------------------------------
 # Prompt builder
@@ -118,7 +162,9 @@ _PATTERNS: list[tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list
     # --- Orders ---
     # Specific order patterns must precede the generic "show ... orders" pattern:
     # _rule_based_interpret is first-match-wins, so a generic match would shadow
-    # the filtered ones and silently drop the at_risk filter.
+    # the filtered ones and silently drop their filter. The same shadowing rule
+    # applies below: the severity patterns precede the generic "show ...
+    # exceptions" pattern for exactly this reason.
     (
         re.compile(r"\bat[- ]?risk\b.*\borders?\b|\borders?\b.*\bat[- ]?risk\b", re.IGNORECASE),
         UserIntent.STATUS_CHECK,
@@ -127,20 +173,33 @@ _PATTERNS: list[tuple[re.Pattern[str], UserIntent, list[TargetSystem], str, list
         [DataFilter(field="at_risk", operator="eq", value=True)],
     ),
     (
-        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
-        UserIntent.STATUS_CHECK,
-        [TargetSystem.OMS],
-        "order",
-        [],
-    ),
-    (
         re.compile(r"\bpending\b.*\borders?\b|\borders?\b.*\bpending\b", re.IGNORECASE),
         UserIntent.STATUS_CHECK,
         [TargetSystem.OMS],
         "order",
         [DataFilter(field="status", operator="eq", value="pending")],
     ),
+    (
+        re.compile(r"\b(?:show|list|get|find|display)\b.*\borders\b", re.IGNORECASE),
+        UserIntent.STATUS_CHECK,
+        [TargetSystem.OMS],
+        "order",
+        [],
+    ),
     # --- Exceptions ---
+    *[
+        (
+            re.compile(
+                rf"\b{sev.value}\b.*\bexceptions?\b|\bexceptions?\b.*\b{sev.value}\b",
+                re.IGNORECASE,
+            ),
+            UserIntent.STATUS_CHECK,
+            [TargetSystem.OMS],
+            "exception",
+            [DataFilter(field="severity", operator="eq", value=sev.value)],
+        )
+        for sev in Severity
+    ],
     (
         re.compile(
             r"\b(?:show|list|get|find|display)\b.*\bexceptions?\b",

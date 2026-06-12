@@ -17,7 +17,8 @@ from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
-# Schema also defined in: models/wms.py (Pydantic), seed/seed_db.py (table creation)
+# Schema also defined in: models/wms.py (Pydantic). The seeder derives its
+# tables from this ORM (Base.metadata), so there is no third copy.
 # ---------------------------------------------------------------------------
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"

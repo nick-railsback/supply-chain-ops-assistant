@@ -9,12 +9,13 @@ Provides the full action pipeline:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from typing import Any
 
 from agent.llm import LLMUnavailable, structured_call
 from agent.validators import validate_action_proposal
-from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER  # noqa: F401
+from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER
 from models.action import ActionProposal, ActionResult, ActionType
 from models.shared import RiskLevel
 from services.client import OpsClient
@@ -73,8 +74,27 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
     ],
 }
 
-# Irreversible statuses that force HIGH risk
-_IRREVERSIBLE_STATUSES = {"cancelled", "returned", "refunded"}
+# Irreversible statuses that force HIGH risk.
+# cancelled: terminal OrderStatus (see validators.ORDER_STATUS_TRANSITIONS)
+# returned:  irreversible ShipmentStatus (models/tms.py)
+_IRREVERSIBLE_STATUSES = frozenset({"cancelled", "returned"})
+
+# Changes touching money force HIGH risk regardless of target count.
+_FINANCIAL_FIELDS = frozenset({"order_value", "shipping_cost"})
+
+_MEDIUM_TARGET_MAX = 10  # <= this -> MEDIUM; above -> HIGH
+_AUTO_CONFIRM_TARGET_MAX = 5  # LOW risk above this still requires confirmation
+_RISK_ORDER = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
+
+# The risk rules the model reads are rendered from the constants above, so the
+# prompt cannot drift from what _assess_risk enforces. Composed once at import
+# (byte-stable, prompt-cache friendly).
+PROPOSE_ACTION_SYSTEM_PROMPT = PROPOSE_ACTION_SYSTEM.format(
+    medium_target_max=_MEDIUM_TARGET_MAX,
+    auto_confirm_target_max=_AUTO_CONFIRM_TARGET_MAX,
+    irreversible_statuses=", ".join(sorted(_IRREVERSIBLE_STATUSES)),
+    financial_fields=", ".join(sorted(_FINANCIAL_FIELDS)),
+)
 
 
 # ===================================================================
@@ -85,6 +105,7 @@ _IRREVERSIBLE_STATUSES = {"cancelled", "returned", "refunded"}
 def _assess_risk(
     target_count: int,
     changes: dict[str, Any],
+    action_type: ActionType | None = None,
 ) -> RiskLevel:
     """Determine risk level from target count and change characteristics.
 
@@ -92,17 +113,104 @@ def _assess_risk(
       - 1 target → LOW
       - 2–10 targets → MEDIUM
       - >10 targets → HIGH
+      - Escalations → at least MEDIUM (priority changes deserve a human gate)
       - Irreversible status transitions → HIGH (override)
+      - Financial-field changes → HIGH (override)
     """
     new_status = changes.get("status", "")
     if isinstance(new_status, str) and new_status in _IRREVERSIBLE_STATUSES:
         return RiskLevel.HIGH
+    if _FINANCIAL_FIELDS & changes.keys():
+        return RiskLevel.HIGH
 
-    if target_count <= 1:
-        return RiskLevel.LOW
-    if target_count <= 10:
+    if target_count > _MEDIUM_TARGET_MAX:
+        return RiskLevel.HIGH
+    if target_count > 1 or action_type is ActionType.ESCALATE_ORDER:
         return RiskLevel.MEDIUM
-    return RiskLevel.HIGH
+    return RiskLevel.LOW
+
+
+def _apply_risk_floor(
+    action_type: ActionType | None,
+    target_ids: list[str],
+    changes: dict[str, Any],
+    claimed_risk: RiskLevel | str | None = None,
+    claimed_confirm: bool = False,
+) -> tuple[RiskLevel, bool]:
+    """Merge the server-computed risk floor with claimed values, raise-only.
+
+    The single place the floor formula lives: ``propose_action`` applies it
+    when a proposal is built, and ``execute_action`` re-applies it at the
+    mutation boundary — so a proposal constructed or mutated anywhere else
+    cannot carry a lowered gate past the floor.
+    """
+    target_count = len(target_ids)
+    risk = _assess_risk(target_count, changes, action_type)
+    if isinstance(claimed_risk, str) and claimed_risk in {r.value for r in RiskLevel}:
+        claimed_risk = RiskLevel(claimed_risk)
+    if isinstance(claimed_risk, RiskLevel):
+        risk = max(risk, claimed_risk, key=_RISK_ORDER.__getitem__)
+    confirm = risk != RiskLevel.LOW or target_count > _AUTO_CONFIRM_TARGET_MAX
+    return risk, confirm or claimed_confirm
+
+
+# Explicit entity ids in a query (e.g. "escalate order ORD-2025-0001").
+_ENTITY_ID_PATTERN = re.compile(r"\b(?:ORD|EXC|SHP)-[A-Za-z0-9-]+\b")
+
+# The id field each action's entity carries in context rows.
+_ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
+    ActionType.UPDATE_ORDER_STATUS: ("order_id",),
+    ActionType.ESCALATE_ORDER: ("order_id",),
+    ActionType.UPDATE_EXCEPTION: ("exception_id",),
+    ActionType.ASSIGN_EXCEPTION: ("exception_id",),
+    ActionType.FLAG_SHIPMENTS: ("shipment_id",),
+    ActionType.BULK_UPDATE: ("id", "order_id", "exception_id", "shipment_id"),
+}
+
+
+def _fallback_target_ids(
+    user_query: str,
+    relevant_data: list[dict[str, Any]],
+    action_type: ActionType,
+) -> list[str]:
+    """Pick the rule path's targets without fanning out across the context.
+
+    Ids named explicitly in the query win, intersected with the context so a
+    typo can't target an unfetched row. Otherwise only rows carrying the id
+    field of the action's entity become targets — a context of mixed entities
+    never all becomes targets of a single action.
+    """
+    id_fields = _ACTION_ID_FIELDS[action_type]
+    context_ids: list[str] = []
+    for row in relevant_data:
+        for id_field in id_fields:
+            if id_field in row:
+                context_ids.append(str(row[id_field]))
+                break
+
+    explicit = _ENTITY_ID_PATTERN.findall(user_query)
+    if explicit:
+        context_set = set(context_ids)
+        return [eid for eid in explicit if eid in context_set]
+    return context_ids
+
+
+def _status_by_target(relevant_data: list[dict[str, Any]]) -> dict[str, str]:
+    """Map each context row's entity id to its current status.
+
+    The single contract both proposal paths use to ground transition
+    validation in the queried context. Join-correlated rows prefix non-key
+    fields with the system (``oms_status``), so both spellings are read; rows
+    without an id or status are skipped — the validator then rejects any
+    target it can't find here rather than borrowing another row's status.
+    """
+    statuses: dict[str, str] = {}
+    for row in relevant_data:
+        entity_id = row.get("order_id") or row.get("id")
+        status = row.get("status") or row.get("oms_status")
+        if entity_id and status:
+            statuses[str(entity_id)] = str(status)
+    return statuses
 
 
 # ===================================================================
@@ -145,61 +253,89 @@ async def propose_action(
     # Try LLM-based proposal generation, routed through the shared structured
     # client (forced tool-use + guaranteed client teardown — see agent/llm.py).
     if settings.is_llm_available:
-        try:
-            import json
+        import json
 
-            prompt = PROPOSE_ACTION_USER.format(
-                user_query=user_query,
-                relevant_data=json.dumps(relevant_data, default=str),
-            )
-            schema = ActionProposal.model_json_schema()
-            # current_status is server-injected validator-only metadata; the
-            # model must never emit it.
-            schema.get("properties", {}).pop("current_status", None)
+        prompt = PROPOSE_ACTION_USER.format(
+            user_query=user_query,
+            relevant_data=json.dumps(relevant_data, default=str),
+        )
+        schema = ActionProposal.model_json_schema()
+        # The model grades its own risk_level / requires_confirmation —
+        # merged below with the server floor, raise-only. The validator-only
+        # current_statuses ground truth must never come from the model.
+        schema.get("properties", {}).pop("current_statuses", None)
+        # Only the call itself may degrade to the rule path: a proposal the
+        # validator rejects must surface to the operator as an error, never
+        # silently become a different proposal.
+        data: dict[str, Any] | None = None
+        try:
             data, usage = await structured_call(
-                system=PROPOSE_ACTION_SYSTEM,
+                system=PROPOSE_ACTION_SYSTEM_PROMPT,
                 user=prompt,
                 tool_name="emit_action_proposal",
                 tool_description="Return a safe, auditable ActionProposal for the user's request.",
                 input_schema=schema,
             )
             logger.debug("propose_action usage=%s", usage)
-            proposal = ActionProposal.model_validate(data)
-            errors = await validate_action_proposal(proposal)
-            if errors:
-                raise ValueError(f"Action validation failed: {'; '.join(errors)}")
-            return proposal
         except LLMUnavailable:
             pass  # fall through to the rule-based path
         except Exception as exc:
             logger.warning("LLM action proposal failed, falling back to rule-based: %s", exc)
 
+        if data is not None:
+            # The model's risk claims are advisory: recompute server-side and
+            # let the claim raise risk/confirmation, never lower them (SEC-1).
+            claimed_risk = data.pop("risk_level", None)
+            claimed_confirm = bool(data.pop("requires_confirmation", False))
+            try:
+                proposed_type = ActionType(data.get("action_type", ""))
+            except ValueError:
+                proposed_type = None  # model_validate rejects it below
+            data["risk_level"], data["requires_confirmation"] = _apply_risk_floor(
+                proposed_type,
+                data.get("target_ids", []),
+                data.get("changes", {}),
+                claimed_risk,
+                claimed_confirm,
+            )
+            # Mirror the rule path: the transition validator needs each target's
+            # current status, which the model must never supply itself.
+            data.pop("current_statuses", None)
+            if data.get("action_type") == ActionType.UPDATE_ORDER_STATUS.value and data.get(
+                "changes", {}
+            ).get("status"):
+                statuses = _status_by_target(relevant_data)
+                data["current_statuses"] = {
+                    tid: statuses[tid]
+                    for tid in map(str, data.get("target_ids", []))
+                    if tid in statuses
+                }
+            proposal = ActionProposal.model_validate(data)
+            errors = await validate_action_proposal(proposal)
+            if errors:
+                raise ValueError(f"Action validation failed: {'; '.join(errors)}")
+            return proposal
+
     # Rule-based fallback
     action_type = _detect_action_type(user_query)
-
-    # Extract target IDs — look in each data row for common ID fields
-    target_ids: list[str] = []
-    for row in relevant_data:
-        for id_field in ("id", "order_id", "exception_id", "shipment_id"):
-            if id_field in row:
-                target_ids.append(str(row[id_field]))
-                break
+    target_ids = _fallback_target_ids(user_query, relevant_data, action_type)
 
     # Extract changes from the first data row or build from query context
     changes: dict[str, Any] = {}
     if relevant_data:
         changes = relevant_data[0].get("changes", {})
 
-    # Status updates need the order's current status to validate the transition.
-    # Capture it as validator-only metadata (ActionProposal.current_status) from
-    # the target row — never into `changes`, so it can't leak onto the wire, into
-    # the impact summary, or into the human-facing proposal summary.
-    current_status: str | None = None
-    if action_type == ActionType.UPDATE_ORDER_STATUS and changes.get("status") and relevant_data:
-        current_status = relevant_data[0].get("status")
+    # Status updates need each target's current status to validate transitions.
+    # Capture them as validator-only metadata (ActionProposal.current_statuses)
+    # from the context rows — never into `changes`, so they can't leak onto the
+    # wire, into the impact summary, or into the human-facing proposal summary.
+    current_statuses: dict[str, str] | None = None
+    if action_type == ActionType.UPDATE_ORDER_STATUS and changes.get("status"):
+        statuses = _status_by_target(relevant_data)
+        current_statuses = {tid: statuses[tid] for tid in target_ids if tid in statuses}
 
     target_count = len(target_ids)
-    risk = _assess_risk(target_count, changes)
+    risk, requires_confirmation = _apply_risk_floor(action_type, target_ids, changes)
 
     # Build human-readable impact summary
     entity_word = "entity" if target_count == 1 else "entities"
@@ -216,8 +352,8 @@ async def propose_action(
         reasoning=f"Action requested via: {user_query}",
         impact_summary=impact,
         risk_level=risk,
-        requires_confirmation=risk != RiskLevel.LOW or target_count > 5,
-        current_status=current_status,
+        requires_confirmation=requires_confirmation,
+        current_statuses=current_statuses,
     )
 
     errors = await validate_action_proposal(proposal)
@@ -304,12 +440,23 @@ async def execute_action(
     ``proposal.action_type``, tracks per-target success/failure, and returns
     an ``ActionResult``.
 
-    Fail-safe gate: if ``proposal.requires_confirmation`` is set, this refuses
-    to mutate anything unless ``confirmed=True`` is passed explicitly (obtained
-    from ``confirm_action`` or the CLI's ``prompt_confirmation``). Otherwise it
-    raises ``ActionNotConfirmedError`` before touching any backend.
+    Fail-safe gate: the confirmation floor is recomputed here, at the mutation
+    boundary, from the proposal's own targets and changes — merged raise-only
+    with the carried ``requires_confirmation`` — so a proposal constructed or
+    mutated outside ``propose_action`` cannot lower its own gate. If the
+    resulting floor requires confirmation, this refuses to mutate anything
+    unless ``confirmed=True`` is passed explicitly (obtained from
+    ``confirm_action`` or the CLI's ``prompt_confirmation``) and raises
+    ``ActionNotConfirmedError`` before touching any backend.
     """
-    if proposal.requires_confirmation and not confirmed:
+    _, requires_confirmation = _apply_risk_floor(
+        proposal.action_type,
+        proposal.target_ids,
+        proposal.changes,
+        proposal.risk_level,
+        proposal.requires_confirmation,
+    )
+    if requires_confirmation and not confirmed:
         raise ActionNotConfirmedError(
             f"Refusing to execute {proposal.action_type.value}: proposal requires "
             f"confirmation but was not confirmed."

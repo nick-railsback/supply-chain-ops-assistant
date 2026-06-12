@@ -7,17 +7,19 @@ from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel
 from sqlalchemy import Float, ForeignKey, Integer, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 from models.oms import (
     DailyStats,
+    ExceptionPatch,
+    ExceptionStatus,
     ExceptionSummary,
     LineItem,
     Order,
     OrderException,
+    OrderPatch,
     OrderWithLineItems,
 )
 from models.shared import PaginatedResponse
@@ -31,7 +33,8 @@ DB_URL = f"sqlite+aiosqlite:///{DATA_DIR / 'oms.db'}"
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
-# Schema also defined in: models/oms.py (Pydantic), seed/seed_db.py (table creation)
+# Schema also defined in: models/oms.py (Pydantic). The seeder derives its
+# tables from this ORM (Base.metadata), so there is no third copy.
 # ---------------------------------------------------------------------------
 
 
@@ -49,6 +52,9 @@ class OrderORM(Base):
     customer_tier: Mapped[str | None] = mapped_column(String, nullable=True)
     status: Mapped[str] = mapped_column(String, nullable=False)
     channel: Mapped[str | None] = mapped_column(String, nullable=True)
+    priority: Mapped[str] = mapped_column(
+        String, nullable=False, default="standard", server_default="standard"
+    )
     created_at: Mapped[str] = mapped_column(String, nullable=False)
     updated_at: Mapped[str | None] = mapped_column(String, nullable=True)
     promised_delivery_date: Mapped[str | None] = mapped_column(String, nullable=True)
@@ -103,21 +109,6 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
-
-
-# ---------------------------------------------------------------------------
-# Patch request models
-# ---------------------------------------------------------------------------
-
-
-class OrderPatch(BaseModel):
-    status: str | None = None
-    notes: str | None = None
-
-
-class ExceptionPatch(BaseModel):
-    status: str | None = None
-    assigned_to: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +294,9 @@ async def patch_order(
         raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
 
     if body.status is not None:
-        order.status = body.status
+        order.status = body.status.value
+    if body.priority is not None:
+        order.priority = body.priority.value
     if body.notes is not None:
         order.notes = body.notes
     order.updated_at = datetime.now(UTC).isoformat()
@@ -327,8 +320,8 @@ async def patch_exception(
         raise HTTPException(status_code=404, detail=f"Exception {exception_id} not found")
 
     if body.status is not None:
-        exc.status = body.status
-        if body.status == "resolved":
+        exc.status = body.status.value
+        if body.status == ExceptionStatus.RESOLVED:
             exc.resolved_at = datetime.now(UTC).isoformat()
     if body.assigned_to is not None:
         exc.assigned_to = body.assigned_to

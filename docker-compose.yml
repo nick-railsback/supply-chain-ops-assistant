@@ -1,7 +1,11 @@
 services:
   seed:
+    # --reset drops and recreates before seeding (same as `make seed`): the
+    # ./data volume can hold a pre-upgrade schema, and create_all alone never
+    # ALTERs existing tables. The data is synthetic and regenerated
+    # deterministically, so every `docker compose up` starts from a known state.
     build: .
-    command: python -m seed.seed_db
+    command: python -m seed.seed_db --reset
     volumes:
       - ./data:/app/data
     depends_on:
@@ -53,7 +57,7 @@ services:
 
   copilot:
     build: .
-    command: python -c "from cli.interactive import main; main()"
+    command: python -m cli.interactive
     stdin_open: true
     tty: true
     depends_on:

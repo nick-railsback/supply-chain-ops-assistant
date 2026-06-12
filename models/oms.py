@@ -3,7 +3,7 @@
 from datetime import date, datetime
 from enum import StrEnum
 
-from models.shared import ApiModel, Severity
+from models.shared import ApiModel, Severity, StrictPatch
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -23,6 +23,13 @@ class OrderStatus(StrEnum):
     DELIVERED = "delivered"
     CANCELLED = "cancelled"
     EXCEPTION = "exception"
+
+
+class OrderPriority(StrEnum):
+    LOW = "low"
+    STANDARD = "standard"
+    HIGH = "high"
+    URGENT = "urgent"
 
 
 class OrderChannel(StrEnum):
@@ -74,6 +81,7 @@ class Order(ApiModel):
     customer_tier: CustomerTier
     status: OrderStatus
     channel: OrderChannel
+    priority: OrderPriority = OrderPriority.STANDARD
     created_at: datetime
     updated_at: datetime | None = None
     promised_delivery_date: datetime | None = None
@@ -123,3 +131,20 @@ class DailyStats(ApiModel):
     total_value: float
     exception_rate: float
     orders_by_status: dict[str, int]
+
+
+# ---------------------------------------------------------------------------
+# Patch request models (the OMS PATCH contracts; agent.validators derives the
+# allowed change fields per action from these)
+# ---------------------------------------------------------------------------
+
+
+class OrderPatch(StrictPatch):
+    status: OrderStatus | None = None
+    notes: str | None = None
+    priority: OrderPriority | None = None
+
+
+class ExceptionPatch(StrictPatch):
+    status: ExceptionStatus | None = None
+    assigned_to: str | None = None

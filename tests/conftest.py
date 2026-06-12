@@ -1,6 +1,6 @@
 """Shared pytest fixtures for test databases and mock clients."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
@@ -24,10 +24,11 @@ def sample_query_plan():
         **kwargs,
     ):
         filters = kwargs.pop("filters", [])
+        primary_entity = kwargs.pop("primary_entity", "orders")
         return QueryPlan(
             intent=intent,
             target_systems=target_systems or [TargetSystem.OMS],
-            primary_entity="orders",
+            primary_entity=primary_entity,
             filters=filters,
             confidence=confidence,
             reasoning="Test query plan",
@@ -47,10 +48,11 @@ def sample_action_proposal():
         risk_level=RiskLevel.LOW,
         **kwargs,
     ):
+        changes = kwargs.pop("changes", {"status": "resolved"})
         return ActionProposal(
             action_type=action_type,
             target_ids=target_ids or ["EXC-0001"],
-            changes={"status": "resolved"},
+            changes=changes,
             reasoning="Test action",
             impact_summary="Test impact",
             risk_level=risk_level,
@@ -194,6 +196,26 @@ async def oms_app():
                 promised_delivery_date="2025-03-13T10:00:00",
                 fulfillment_center_id="FC-EAST",
                 total_value=100.00,
+                currency="USD",
+                line_item_count=1,
+                notes=None,
+            ),
+            # Active order promised inside the at-risk window [now, now+2d]; the
+            # other rows carry fixed March-2025 dates, so this is the only row
+            # the /orders/at-risk endpoint can return.
+            OrderORM(
+                order_id="ORD-2025-006",
+                customer_id="CUST-006",
+                customer_name="Frank Miller",
+                customer_email="frank@example.com",
+                customer_tier="premium",
+                status="processing",
+                channel="dtc_web",
+                created_at=datetime.now(UTC).isoformat(),
+                updated_at=datetime.now(UTC).isoformat(),
+                promised_delivery_date=(datetime.now(UTC) + timedelta(days=1)).isoformat(),
+                fulfillment_center_id="FC-EAST",
+                total_value=250.00,
                 currency="USD",
                 line_item_count=1,
                 notes=None,
@@ -757,3 +779,28 @@ async def tms_client(tms_app):
         headers={"X-API-Key": "dev-secret-key-change-me"},
     ) as client:
         yield client
+
+
+@pytest.fixture
+async def ops_client(oms_app, wms_app, tms_app):
+    """Real OpsClient wired to the in-process ASGI apps.
+
+    OpsClient builds its own httpx clients in __init__; we drop those and swap in
+    ASGITransport-backed clients so the unified client exercises the real error
+    mapping, retry, and header plumbing against the test apps.
+    """
+    from services.client import OpsClient
+
+    client = OpsClient()
+    await client.aclose()  # drop the real network clients
+    client._oms = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=oms_app), base_url="http://oms"
+    )
+    client._wms = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=wms_app), base_url="http://wms"
+    )
+    client._tms = httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=tms_app), base_url="http://tms"
+    )
+    yield client
+    await client.aclose()

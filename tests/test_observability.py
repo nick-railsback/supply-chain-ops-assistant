@@ -8,9 +8,10 @@ from unittest.mock import AsyncMock, patch
 
 from rich.console import Console
 
+from agent.copilot import Copilot
 from agent.query_interpreter import llm_interpret
 from cli.interactive import render_reasoning_panel
-from models.query import QueryPlan
+from models.query import QueryPlan, QueryResult
 from models.shared import TargetSystem, UserIntent
 
 _VALID_TOOL_INPUT = {
@@ -61,6 +62,35 @@ def test_reasoning_panel_shows_tokens_and_latency():
     assert "120" in text  # input tokens
     assert "45" in text  # output tokens
     assert "830" in text  # latency ms
+
+
+async def test_process_query_starts_a_fresh_trace():
+    """Each turn opens its own trace, so one turn == one trace id across the
+    three services (the CLI previously never started a trace at all)."""
+    import config.logging as clog
+
+    plan = QueryPlan(
+        intent=UserIntent.STATUS_CHECK,
+        target_systems=[TargetSystem.OMS],
+        primary_entity="order",
+        filters=[],
+        confidence=0.9,
+        reasoning="orders",
+    )
+    res = QueryResult(data=[], total_count=0, systems_queried=[TargetSystem.OMS])
+    copilot = Copilot()
+    with (
+        patch("agent.copilot.interpret_query", AsyncMock(return_value=plan)),
+        patch("agent.copilot.execute_query", AsyncMock(return_value=res)),
+    ):
+        await copilot.process_query("show all orders")
+        first = clog.trace_id_var.get()
+        await copilot.process_query("show all orders")
+        second = clog.trace_id_var.get()
+
+    assert first is not None
+    assert second is not None
+    assert first != second
 
 
 def test_reasoning_panel_omits_usage_when_absent():

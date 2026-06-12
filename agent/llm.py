@@ -106,6 +106,10 @@ async def structured_call(
         usage = {
             "input_tokens": message.usage.input_tokens,
             "output_tokens": message.usage.output_tokens,
+            "cache_read_input_tokens": getattr(message.usage, "cache_read_input_tokens", 0) or 0,
+            "cache_creation_input_tokens": (
+                getattr(message.usage, "cache_creation_input_tokens", 0) or 0
+            ),
         }
 
         for block in message.content:

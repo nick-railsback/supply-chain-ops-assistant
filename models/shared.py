@@ -19,6 +19,17 @@ class ApiModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class StrictPatch(BaseModel):
+    """Base for PATCH request bodies: unknown fields are rejected (422).
+
+    Without this, pydantic's default ``extra="ignore"`` silently drops a
+    misspelled or unsupported change while the mutation reports success.
+    Every patch model must inherit it so the next one can't regress.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
 class PaginatedResponse(BaseModel, Generic[T]):
     """Wrapper for paginated list responses."""
 

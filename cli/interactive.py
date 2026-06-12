@@ -13,6 +13,7 @@ from rich.table import Table
 from rich.text import Text
 
 from agent.copilot import Copilot
+from config.prompts import EXECUTE_AND_FLAG_RESPONSE
 from models.action import ActionProposal
 from models.query import ConfidenceSignals, QueryPlan
 from models.report import ReportOutput
@@ -693,15 +694,54 @@ class InteractiveCLI:
 
         if status == "flagged":
             self.console.print(f"[yellow]\u26a0 {message}[/yellow]")
+        elif result.get("flagged"):
+            # Flag-band interpretation behind a report or proposal: warn
+            # before anything renders \u2014 and before any confirmation prompt \u2014
+            # so the operator knows to double-check the interpretation.
+            caveat = EXECUTE_AND_FLAG_RESPONSE.format(
+                interpretation=plan.reasoning if plan is not None else message
+            )
+            self.console.print(f"[yellow]\u26a0 {caveat}[/yellow]")
+
+        if status == "report" and result.get("report") is not None:
+            self.console.print(render_report(result["report"]))
+            return
+
+        if status == "action_proposed" and result.get("proposal") is not None:
+            proposal = result["proposal"]
+            if proposal.requires_confirmation:
+                confirmed = await prompt_confirmation(proposal)
+                if not confirmed:
+                    self.console.print(
+                        "[yellow]Action cancelled \u2014 nothing was changed.[/yellow]"
+                    )
+                    return
+            else:
+                self.console.print(display_action_proposal(proposal))
+                self.console.print("[dim]Low risk \u2014 proceeding without confirmation.[/dim]")
+            action_result = await self.copilot.execute_confirmed_action(proposal, confirmed=True)
+            self.console.print(
+                f"[green]\u2713 {len(action_result.successful)}/{action_result.total_targets} "
+                f"succeeded[/green] ({action_result.execution_time_ms:.0f}ms)"
+            )
+            for failure in action_result.failed:
+                self.console.print(f"[red]\u2717 {failure['id']}: {failure['error']}[/red]")
+            return
 
         # Format and display the data
         data = result.get("data")
-        if data:
-            formatted = format_query_result(data)
-            if isinstance(formatted, str):
-                self.console.print(formatted)
-            else:
-                self.console.print(formatted)
+        if data and data.get("partial_failure"):
+            for system, err in (data.get("error_details") or {}).items():
+                self.console.print(f"[red]✗ {system.upper()} unreachable: {err}[/red]")
+        if data and data.get("data"):
+            self.console.print(format_query_result(data))
+        elif data and data.get("partial_failure"):
+            self.console.print(
+                "[yellow]No rows returned — results may be incomplete because some "
+                "systems did not respond.[/yellow]"
+            )
+        elif data is not None:
+            self.console.print("No results found for that query.")
         else:
             self.console.print(message)
 
@@ -713,6 +753,10 @@ class InteractiveCLI:
 
 def main() -> None:
     """Launch the interactive CLI."""
+    from config.logging import setup_logging
+    from config.settings import get_settings
+
+    setup_logging(get_settings().log_level)
     cli = InteractiveCLI()
     asyncio.run(cli.run())
 

@@ -19,6 +19,10 @@ from seed.constants import (
 )
 from seed.context import SeedContext
 
+# Shipped/delivered orders feed shipment generation, but order statuses are not
+# ShipmentStatus members. Map the two that occur; anything else is in transit.
+_ORDER_TO_SHIPMENT_STATUS = {"shipped": "in_transit", "delivered": "delivered"}
+
 
 def _weighted_choice(options: dict[str, float]) -> str:
     """Pick a single key from a dict of {option: weight}."""
@@ -467,11 +471,16 @@ class DataGenerator:
                     "carrier": carrier_name,
                     "service_level": str(service),
                     "origin_center_id": origin_center,
+                    "destination_zip": str(order_data["shipping_address"]["zip"]),
+                    "destination_state": str(order_data["shipping_address"]["state"]),
                     "tracking_number": uuid.uuid4().hex[:20].upper(),
                     "sla_status": sla_status,
                     "shipped_at": ship_date.isoformat(),
                     "estimated_delivery": est_delivery.date().isoformat(),
-                    "status": str(order_data["status"]),
+                    # Order statuses are not ShipmentStatus members; map them.
+                    "status": _ORDER_TO_SHIPMENT_STATUS.get(
+                        str(order_data["status"]), "in_transit"
+                    ),
                 }
             )
 

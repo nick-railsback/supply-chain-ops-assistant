@@ -97,9 +97,11 @@ class OpsClient:
         for attempt in range(2):  # 1 retry
             try:
                 response = await client.request(method, path, headers=headers, **kwargs)
-            except httpx.ConnectError:
+            except (httpx.ConnectError, httpx.TimeoutException):
+                # ConnectTimeout is not a ConnectError subclass, so both must be
+                # caught explicitly or a timeout would escape unmapped.
                 raise ServiceUnavailableError(
-                    service=service, detail=f"Connection failed for {method} {path}"
+                    service=service, detail=f"Connection failed or timed out for {method} {path}"
                 )
 
             if response.status_code < 500:
@@ -143,7 +145,7 @@ class OpsClient:
         try:
             resp = await client.get("/health")
             return resp.status_code == 200
-        except httpx.ConnectError:
+        except (httpx.ConnectError, httpx.TimeoutException):
             return False
 
     # ==================================================================

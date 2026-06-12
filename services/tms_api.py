@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import datetime
 from pathlib import Path
 
 from fastapi import Depends, HTTPException, Query
-from pydantic import BaseModel
-from sqlalchemy import Float, ForeignKey, String, func, select
+from sqlalchemy import Boolean, Float, ForeignKey, String, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship, selectinload
 
@@ -16,17 +14,16 @@ from models.shared import PaginatedResponse
 from models.tms import (
     CarrierStats,
     Shipment,
-    ShipmentStatus,
+    ShipmentPatch,
     ShipmentWithTracking,
-    SLAStatus,
     SLASummary,
-    TrackingEvent,
 )
 from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
 # SQLAlchemy ORM models
-# Schema also defined in: models/tms.py (Pydantic), seed/seed_db.py (table creation)
+# Schema also defined in: models/tms.py (Pydantic). The seeder derives its
+# tables from this ORM (Base.metadata), so there is no third copy.
 # ---------------------------------------------------------------------------
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "tms.db"
@@ -56,6 +53,9 @@ class ShipmentORM(Base):
     actual_delivery: Mapped[str | None] = mapped_column(String, nullable=True)
     sla_target: Mapped[str] = mapped_column(String)
     sla_status: Mapped[str] = mapped_column(String)
+    flagged: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("0")
+    )
 
     tracking_events: Mapped[list[TrackingEventORM]] = relationship(
         back_populates="shipment", lazy="selectin"
@@ -86,18 +86,6 @@ async_session_factory = async_sessionmaker(engine, expire_on_commit=False)
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
     async with async_session_factory() as session:
         yield session
-
-
-# ---------------------------------------------------------------------------
-# Patch request models
-# ---------------------------------------------------------------------------
-
-
-class ShipmentPatch(BaseModel):
-    status: ShipmentStatus | None = None
-    sla_status: SLAStatus | None = None
-    actual_delivery: datetime | None = None
-    estimated_delivery: datetime | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -198,26 +186,7 @@ async def get_shipment(
     if shipment is None:
         raise HTTPException(status_code=404, detail=f"Shipment {shipment_id} not found")
 
-    data = {
-        "shipment_id": shipment.shipment_id,
-        "order_id": shipment.order_id,
-        "carrier": shipment.carrier,
-        "service_level": shipment.service_level,
-        "status": shipment.status,
-        "tracking_number": shipment.tracking_number,
-        "origin_center_id": shipment.origin_center_id,
-        "destination_zip": shipment.destination_zip or "",
-        "destination_state": shipment.destination_state or "",
-        "weight_lbs": shipment.weight_lbs,
-        "shipping_cost": shipment.shipping_cost,
-        "label_created_at": shipment.label_created_at,
-        "estimated_delivery": shipment.estimated_delivery,
-        "actual_delivery": shipment.actual_delivery,
-        "sla_target": shipment.sla_target,
-        "sla_status": shipment.sla_status,
-        "tracking_events": [TrackingEvent.model_validate(e) for e in shipment.tracking_events],
-    }
-    return ShipmentWithTracking.model_validate(data)
+    return ShipmentWithTracking.model_validate(shipment)
 
 
 @app.get("/stats/carrier-performance", response_model=list[CarrierStats])

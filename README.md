@@ -131,11 +131,14 @@ git clone https://github.com/nick-railsback/supply-chain-ops-assistant.git
 cd supply-chain-ops-assistant
 cp .env.example .env
 
-# Start all services and seed the databases
-docker compose up --build
+# Start the services and seed the databases (detached)
+docker compose up -d --build
+
+# Attach the interactive copilot CLI
+docker compose run --rm copilot
 ```
 
-The `docker compose` stack starts the three API services (OMS on `:8001`, WMS on `:8002`, TMS on `:8003`), seeds the databases with realistic test data, and launches the interactive copilot CLI.
+The `docker compose` stack starts the three API services (OMS on `:8001`, WMS on `:8002`, TMS on `:8003`) and seeds the databases with realistic test data. `docker compose up` does not attach stdin to the copilot, so launch the CLI with `docker compose run --rm copilot`.
 
 ### Option 2: Local Development
 
@@ -154,7 +157,10 @@ make seed
 make serve
 
 # Launch the interactive CLI
-python -c "from cli.interactive import main; main()"
+make cli
+
+# When you're done, stop the background services
+make stop
 ```
 
 ### Verify It Works
@@ -225,7 +231,7 @@ A multi-agent architecture (separate agents for OMS, WMS, TMS) would add coordin
 
 ### Mock APIs via HTTP vs Direct Database Access
 
-Each backend (OMS, WMS, TMS) runs as a real FastAPI service with its own SQLite database, rather than the copilot querying databases directly. This enforces service boundaries that mirror production architecture: the copilot only knows HTTP endpoints, not schema details. It also makes the system testable with `pytest-httpx` and deployable with Docker Compose where each service is an independent container with health checks.
+Each backend (OMS, WMS, TMS) runs as a real FastAPI service with its own SQLite database, rather than the copilot querying databases directly. This enforces service boundaries that mirror production architecture: the copilot only knows HTTP endpoints, not schema details. It also makes the system testable in-process — the client and query layers run against the real apps over httpx `ASGITransport` — and deployable with Docker Compose where each service is an independent container with health checks.
 
 ### Rich CLI vs Web UI
 
@@ -257,11 +263,13 @@ Because the assistant can *mutate* live systems — update order status, assign 
 
 **Confirmation is a hard gate.** Every `ActionProposal` carries `requires_confirmation` (default `True`). `execute_action` refuses to touch a backend when a proposal requires confirmation and hasn't been explicitly confirmed: it raises `ActionNotConfirmedError` *before* any mutation rather than proceeding. The library helper `confirm_action` auto-approves only proposals that don't require confirmation; anything riskier must be approved by a human, and the CLI's interactive prompt (`prompt_confirmation`) defaults to **No**.
 
-**Risk is assessed, not assumed.** `propose_action` grades each proposal: one target is `LOW`, 2–10 is `MEDIUM`, more than 10 is `HIGH`, and any irreversible status (`cancelled`, `returned`, `refunded`) forces `HIGH` regardless of count. Anything above `LOW` — or any proposal touching more than five targets — requires confirmation.
+**Risk is assessed, not assumed.** `propose_action` grades each proposal: one target is `LOW`, 2–10 is `MEDIUM`, more than 10 is `HIGH`; escalations are graded at least `MEDIUM`; and any irreversible status (`cancelled`, `returned`) or change touching a financial field forces `HIGH` regardless of count. Anything above `LOW` — or any proposal touching more than five targets — requires confirmation. When the LLM proposes an action, its own `risk_level`/`requires_confirmation` grades are merged with this server-computed floor by taking the higher of the two, so the model can *raise* the risk floor but never lower it — and the validator's ground truth (`current_status`) is stripped from the tool schema so the model can never supply it.
 
-**Bulk writes are capped.** A `BULK_UPDATE` affecting more than `settings.bulk_update_cap` (default 50) targets fails validation outright, so a misinterpreted "update all …" can't fan out unbounded.
+**Bulk writes are capped.** Any action affecting more than `settings.bulk_update_cap` (default 50) targets fails validation outright, so a misinterpreted "update all …" can't fan out unbounded.
 
-**Only valid state transitions are allowed.** Order status updates are checked against an explicit transition map (`validators.ORDER_STATUS_TRANSITIONS`): e.g. `pending → {confirmed, cancelled}` and `shipped → in_transit`, while terminal states (`cancelled`, `returned`) permit no onward transition. An update naming an illegal transition is rejected with the allowed set, and one that can't identify the order's *current* status is rejected too — the validator needs both ends of the transition.
+**Action requests run end to end.** An `action_request` intent flows interpret → `propose_action` → human confirmation in the CLI → `execute_action`. The confirmation decision lives in the interactive layer; the copilot library never prompts.
+
+**Only valid state transitions are allowed.** Order status updates are checked against an explicit transition map (`validators.ORDER_STATUS_TRANSITIONS`): `pending → {processing, cancelled}`, `processing → {shipped, cancelled, exception}`, `shipped → {delivered, exception}`, and `exception → {processing, cancelled}`, while terminal states (`delivered`, `cancelled`) permit no onward transition. An update naming an illegal transition is rejected with the allowed set, and one that can't identify the order's *current* status is rejected too — the validator needs both ends of the transition.
 
 **Reads and writes gate on confidence differently.** A wrong read wastes a second; a wrong write escalates the wrong exception. So `action_request` carries the highest auto-execute threshold (`0.90`) — see [Per-Intent Confidence Thresholds](#per-intent-confidence-thresholds).
 
@@ -301,13 +309,13 @@ LLM_MODEL=claude-sonnet-4-6 make eval EVAL_ARGS="--arm llm" # Sonnet comparison
 | Metric | Rule | Haiku 4.5 | Sonnet 4.6 |
 |--------|------|-----------|-----------|
 | Intent accuracy | 52% | **100%** | 88% |
-| Target-system match (exact) | 52% | **97%** | 85% |
-| Filter extraction | 25% | **58%** | 58% |
-| Clarification precision | 18% | **100%** | 50% |
+| Target-system match (exact) | 55% | **97%** | 85% |
+| Filter extraction | 50% | **58%** | 58% |
+| Clarification precision | 19% | **100%** | 50% |
 | Clarification recall | 100% | 100% | 100% |
 | Cost / 33-case run | — | ~$0.07 | ~$0.25 |
 
-The rule baseline is deliberately unflattering: it drops filters it has no pattern for, misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies** (100% recall, 18% precision — it asks for clarification on most queries it can't pattern-match). Its confidence collapses to two constants (`0.2` / `0.75`), so its reliability table has two rows. The Claude interpreter closes that gap: forced tool-use returns schema-valid plans by construction, and confidence derived from emitted signals gives a reliability table that spans real bands.
+The rule baseline is deliberately unflattering: it drops filters it has no pattern for, misclassifies `report` / `analysis` / `action_request` phrasings, and **over-clarifies** (100% recall, 19% precision — it asks for clarification on most queries it can't pattern-match). Its confidence collapses to two constants (`0.2` / `0.75`), so its reliability table has two rows. The Claude interpreter closes that gap: forced tool-use returns schema-valid plans by construction, and confidence derived from emitted signals gives a reliability table that spans real bands.
 
 **A finding worth stating plainly: the cheaper, faster model won.** Haiku 4.5 matches or beats Sonnet 4.6 on every metric here — it ties on filter extraction (58%) and wins everywhere else, including intent (100% vs 88%) and target-system selection (97% vs 85%) — at ~⅓ the cost. Sonnet's main weakness is *over-clarification*: at 50% clarification precision, half the queries it flags as too-ambiguous-to-answer were actually answerable, whereas Haiku declines only the genuinely ambiguous ones (100% precision) without missing any (100% recall). Both models put most cases in their top confidence band and are mostly right there (Haiku 30 cases → 97%, Sonnet 27 → 93%), so the gap is accuracy, not calibration. For a structured-classification task against known systems, the smaller model is the right production default — which is why it is the default in `config/settings.py`. *(Caveat: N=33, one run per arm at `temperature=0`; the gold set is being expanded before treating this as definitive — 100% intent on 33 cases shows the rule→LLM gap is real here, not that the interpreter is infallible.)*
 
@@ -384,7 +392,7 @@ supply-chain-ops-assistant/
 |-------|-----------|-----------|
 | Language | Python 3.11+ | Async-first, strong typing with `|` union syntax, ecosystem depth |
 | Agent Orchestration | Custom Copilot class | Explicit pipeline stages, no framework lock-in, full auditability |
-| LLM Integration | Anthropic Claude (tool-use) | Claude is the default interpreter — forced `tool_choice` for schema-valid plans, prompt caching, `temperature=0` — on Haiku 4.5; the rule-based interpreter is a typed fallback. See [Evaluation](#evaluation). |
+| LLM Integration | Anthropic Claude (tool-use) | Claude is the default interpreter — forced `tool_choice` for schema-valid plans, `temperature=0` — on Haiku 4.5; the rule-based interpreter is a typed fallback. Cache-control markers are set on the system prompt, but the ~1.3k-token cacheable prefix sits below Haiku 4.5's 4,096-token minimum, so caching only engages on models/prompts that clear it; the per-call cache read/creation counters are now logged to make that visible. See [Evaluation](#evaluation). |
 | Data Validation | Pydantic v2 | Runtime type enforcement at every boundary, JSON schema generation |
 | Configuration | pydantic-settings | Typed env vars with `.env` file support and validation |
 | API Framework | FastAPI | Async-native, automatic OpenAPI docs, Pydantic integration |
@@ -394,12 +402,12 @@ supply-chain-ops-assistant/
 | CLI Framework | Rich | Formatted tables, color-coded statuses, panels, spinners, prompts |
 | Test Data | Faker | Realistic names, dates, addresses for seed data generation |
 | Testing | pytest + pytest-asyncio | Async test support, fixture composition, scenario parameterization |
-| HTTP Mocking | pytest-httpx | Intercept and mock httpx calls for isolated client testing |
+| Integration testing | httpx `ASGITransport` | In-process integration: OpsClient and query execution run against the real FastAPI apps, no live server needed |
 | Linting | Ruff | Fast Python linter and formatter (replaces flake8 + isort + black) |
 | Type Checking | mypy | Static type verification across all modules |
 | Package Manager | uv | Fast dependency resolution and virtual environment management |
 | Containerization | Docker + Compose | Multi-service orchestration with health checks and volume mounts |
-| Observability | structlog + trace middleware | Structured JSON logs with X-Trace-ID propagation across services |
+| Observability | structlog + trace middleware | Structured JSON logs initialized at CLI startup; one trace id per turn (`new_trace`) propagates as `X-Trace-ID` across all three services, so a cross-system query shares a single trace |
 
 ---
 

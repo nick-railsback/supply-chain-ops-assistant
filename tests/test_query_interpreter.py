@@ -1,6 +1,9 @@
 """Tests for rule-based query interpreter (Story 15.6)."""
 
+from unittest.mock import AsyncMock, patch
+
 from agent.query_interpreter import _rule_based_interpret, interpret_query
+from config.settings import get_settings
 from models.shared import TargetSystem, UserIntent
 
 # ---------------------------------------------------------------------------
@@ -22,6 +25,23 @@ class TestRuleBasedInterpret:
         assert plan.intent == UserIntent.STATUS_CHECK
         assert TargetSystem.OMS in plan.target_systems
         assert any(f.field == "status" and f.value == "pending" for f in plan.filters)
+
+    def test_pending_orders_with_show_verb(self):
+        # "show me all pending orders" contains show+orders, so the generic
+        # pattern must not shadow the pending one (same bug class as at_risk).
+        for query in ("show me all pending orders", "what orders are pending"):
+            plan = _rule_based_interpret(query)
+            assert plan is not None, query
+            assert any(f.field == "status" and f.value == "pending" for f in plan.filters), query
+
+    def test_critical_exceptions_emit_severity_filter(self):
+        plan = _rule_based_interpret("show me all critical exceptions")
+        assert plan is not None
+        assert any(f.field == "severity" and f.value == "critical" for f in plan.filters)
+        # Generic exceptions query stays unfiltered.
+        plan = _rule_based_interpret("show all exceptions")
+        assert plan is not None
+        assert plan.filters == []
 
     def test_at_risk_orders(self):
         # Both phrasings must emit the at_risk filter. "show at-risk orders"
@@ -94,3 +114,22 @@ class TestInterpretQuery:
         plan = await interpret_query("xyzzy plugh foo bar", [])
         assert plan.intent == UserIntent.CLARIFICATION_NEEDED
         assert plan.confidence < 0.5
+
+    async def test_interpret_query_rule_based_when_llm_disabled(self, monkeypatch):
+        """LLM off -> the typed rule interpreter runs, tagged rule_based."""
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)
+        plan = await interpret_query("show all orders", [])
+        assert plan.interpretation_source == "rule_based"
+        assert TargetSystem.OMS in plan.target_systems
+
+    async def test_interpret_query_fallback_when_llm_errors(self, monkeypatch):
+        """A configured key but a failing LLM call degrades to the rule path,
+        tagged fallback (never a silent degrade)."""
+        monkeypatch.setattr(get_settings(), "anthropic_api_key", "sk-ant-test")
+        with patch(
+            "agent.query_interpreter.structured_call",
+            AsyncMock(side_effect=RuntimeError("boom")),
+        ):
+            plan = await interpret_query("show all orders", [])
+        assert plan.interpretation_source == "fallback"
+        assert TargetSystem.OMS in plan.target_systems

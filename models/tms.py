@@ -3,7 +3,7 @@
 from datetime import datetime
 from enum import StrEnum
 
-from models.shared import ApiModel
+from models.shared import ApiModel, StrictPatch
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -46,8 +46,10 @@ class Shipment(ApiModel):
     status: ShipmentStatus
     tracking_number: str
     origin_center_id: str
-    destination_zip: str
-    destination_state: str
+    # Nullable to match the ORM columns: rows seeded before these fields were
+    # populated hold NULL, and reading them must not fail response validation.
+    destination_zip: str | None = None
+    destination_state: str | None = None
     weight_lbs: float
     shipping_cost: float
     label_created_at: datetime
@@ -55,6 +57,7 @@ class Shipment(ApiModel):
     actual_delivery: datetime | None = None
     sla_target: datetime
     sla_status: SLAStatus
+    flagged: bool = False
 
 
 class TrackingEvent(ApiModel):
@@ -94,3 +97,17 @@ class SLASummary(ApiModel):
     met: int
     compliance_rate: float
     by_carrier: dict[str, dict[str, int]]
+
+
+# ---------------------------------------------------------------------------
+# Patch request models (the TMS PATCH contract; agent.validators derives the
+# allowed change fields per action from this)
+# ---------------------------------------------------------------------------
+
+
+class ShipmentPatch(StrictPatch):
+    status: ShipmentStatus | None = None
+    sla_status: SLAStatus | None = None
+    actual_delivery: datetime | None = None
+    estimated_delivery: datetime | None = None
+    flagged: bool | None = None
