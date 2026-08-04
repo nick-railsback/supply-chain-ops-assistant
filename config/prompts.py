@@ -77,6 +77,7 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
   assign_exception     – assign an exception to a team member
   escalate_order       – escalate an order for priority handling
   flag_shipments       – flag one or more shipments for review
+  adjust_inventory     – adjust an inventory record's on-hand count or reorder point
   bulk_update          – apply the same change to many entities at once
 
 # Risk
@@ -84,7 +85,8 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
   proposal and merges the two by taking the higher — your judgement can raise
   the floor, never lower it. The server floor:
     LOW    – a single target with a reversible status transition
-    MEDIUM – 2 to {medium_target_max} targets, or any escalation
+    MEDIUM – 2 to {medium_target_max} targets, any escalation, or any
+             inventory adjustment
     HIGH   – more than {medium_target_max} targets, any irreversible status
              ({irreversible_statuses}), or any change touching a financial
              field ({financial_fields})

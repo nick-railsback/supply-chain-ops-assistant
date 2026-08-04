@@ -16,6 +16,7 @@ class ActionType(StrEnum):
     ASSIGN_EXCEPTION = "assign_exception"
     ESCALATE_ORDER = "escalate_order"
     FLAG_SHIPMENTS = "flag_shipments"
+    ADJUST_INVENTORY = "adjust_inventory"
     BULK_UPDATE = "bulk_update"
 
 

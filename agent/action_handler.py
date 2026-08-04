@@ -67,6 +67,13 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
         "flag delivery",
         "review shipment",
     ],
+    ActionType.ADJUST_INVENTORY: [
+        "adjust inventory",
+        "inventory count",
+        "adjust stock",
+        "recount",
+        "set on hand",
+    ],
     ActionType.BULK_UPDATE: [
         "bulk update",
         "update all",
@@ -113,7 +120,7 @@ def _assess_risk(
       - 1 target → LOW
       - 2–10 targets → MEDIUM
       - >10 targets → HIGH
-      - Escalations → at least MEDIUM (priority changes deserve a human gate)
+      - Escalations and inventory adjustments → at least MEDIUM
       - Irreversible status transitions → HIGH (override)
       - Financial-field changes → HIGH (override)
     """
@@ -125,7 +132,10 @@ def _assess_risk(
 
     if target_count > _MEDIUM_TARGET_MAX:
         return RiskLevel.HIGH
-    if target_count > 1 or action_type is ActionType.ESCALATE_ORDER:
+    if target_count > 1 or action_type in {
+        ActionType.ESCALATE_ORDER,
+        ActionType.ADJUST_INVENTORY,
+    }:
         return RiskLevel.MEDIUM
     return RiskLevel.LOW
 
@@ -155,7 +165,7 @@ def _apply_risk_floor(
 
 
 # Explicit entity ids in a query (e.g. "escalate order ORD-2025-0001").
-_ENTITY_ID_PATTERN = re.compile(r"\b(?:ORD|EXC|SHP)-[A-Za-z0-9-]+\b")
+_ENTITY_ID_PATTERN = re.compile(r"\b(?:ORD|EXC|SHP|INV)-[A-Za-z0-9-]+\b")
 
 # The id field each action's entity carries in context rows.
 _ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
@@ -164,7 +174,8 @@ _ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
     ActionType.UPDATE_EXCEPTION: ("exception_id",),
     ActionType.ASSIGN_EXCEPTION: ("exception_id",),
     ActionType.FLAG_SHIPMENTS: ("shipment_id",),
-    ActionType.BULK_UPDATE: ("id", "order_id", "exception_id", "shipment_id"),
+    ActionType.ADJUST_INVENTORY: ("inventory_id",),
+    ActionType.BULK_UPDATE: ("id", "order_id", "exception_id", "shipment_id", "inventory_id"),
 }
 
 
@@ -387,6 +398,8 @@ def format_proposal_summary(proposal: ActionProposal) -> str:
         entity_noun = "order" if len(proposal.target_ids) == 1 else "orders"
     elif "shipment" in action_name:
         entity_noun = "shipment" if len(proposal.target_ids) == 1 else "shipments"
+    elif "inventory" in action_name:
+        entity_noun = "inventory record" if len(proposal.target_ids) == 1 else "inventory records"
     else:
         entity_noun = "entity" if len(proposal.target_ids) == 1 else "entities"
 
@@ -514,6 +527,9 @@ async def _dispatch_action(
         flag_changes = {**changes, "flagged": True}
         await client.update_shipment(target_id, flag_changes)
 
+    elif action_type == ActionType.ADJUST_INVENTORY:
+        await client.update_inventory(target_id, changes)
+
     elif action_type == ActionType.BULK_UPDATE:
         # Bulk update: try to infer the entity type from the target ID prefix
         if target_id.startswith("ORD"):
@@ -522,6 +538,8 @@ async def _dispatch_action(
             await client.update_exception(target_id, changes)
         elif target_id.startswith("SHP"):
             await client.update_shipment(target_id, changes)
+        elif target_id.startswith("INV"):
+            await client.update_inventory(target_id, changes)
         else:
             raise ValueError(
                 f"Cannot route bulk update for target '{target_id}': unknown ID prefix."

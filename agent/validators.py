@@ -11,6 +11,7 @@ from models.action import ActionProposal, ActionType
 from models.oms import ExceptionPatch, OrderPatch
 from models.query import QueryPlan
 from models.tms import ShipmentPatch
+from models.wms import InventoryPatch
 
 # ---------------------------------------------------------------------------
 # Field registry: (system, entity, field) -> field_type
@@ -114,6 +115,7 @@ _PATCHABLE_FIELDS: dict[str, frozenset[str]] = {
     "order": frozenset(OrderPatch.model_fields),
     "exception": frozenset(ExceptionPatch.model_fields),
     "shipment": frozenset(ShipmentPatch.model_fields),
+    "inventory": frozenset(InventoryPatch.model_fields),
 }
 
 _ACTION_ENTITY: dict[ActionType, str] = {
@@ -122,10 +124,16 @@ _ACTION_ENTITY: dict[ActionType, str] = {
     ActionType.UPDATE_EXCEPTION: "exception",
     ActionType.ASSIGN_EXCEPTION: "exception",
     ActionType.FLAG_SHIPMENTS: "shipment",
+    ActionType.ADJUST_INVENTORY: "inventory",
 }
 
 # BULK_UPDATE routes per target by id prefix (same map _dispatch_action uses).
-_ID_PREFIX_ENTITY: dict[str, str] = {"ORD": "order", "EXC": "exception", "SHP": "shipment"}
+_ID_PREFIX_ENTITY: dict[str, str] = {
+    "ORD": "order",
+    "EXC": "exception",
+    "SHP": "shipment",
+    "INV": "inventory",
+}
 
 # ---------------------------------------------------------------------------
 # Order status transition map
