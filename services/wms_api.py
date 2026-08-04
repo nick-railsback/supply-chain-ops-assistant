@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 from sqlalchemy import Boolean, Float, Integer, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from models.shared import PaginatedResponse
-from models.wms import FulfillmentCenter, InventoryItem, StockMovement
+from models.wms import FulfillmentCenter, InventoryItem, InventoryPatch, StockMovement
 from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
@@ -241,3 +241,48 @@ async def utilization_stats(
     result = await session.execute(select(FulfillmentCenterORM))
     rows = result.scalars().all()
     return [FulfillmentCenter.model_validate(r) for r in rows]
+
+
+@app.patch("/inventory/{inventory_id}", response_model=InventoryItem)
+async def update_inventory(
+    inventory_id: str,
+    body: InventoryPatch,
+    session: AsyncSession = Depends(get_session),
+) -> InventoryItem:
+    """Adjust on-hand count and reorder point, keeping availability derived."""
+    result = await session.execute(
+        select(InventoryORM).where(InventoryORM.inventory_id == inventory_id)
+    )
+    item = result.scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Inventory {inventory_id} not found")
+
+    # exclude_unset distinguishes "field absent" from "field sent as null", and
+    # absent is what decides whether this patch counts as a stock count below.
+    changes = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+
+    # Reject before writing anything: a refused patch must leave the row intact.
+    new_on_hand = changes.get("quantity_on_hand")
+    if new_on_hand is not None and new_on_hand < item.quantity_allocated:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"quantity_on_hand {new_on_hand} is below quantity_allocated "
+                f"{item.quantity_allocated}; availability cannot be negative"
+            ),
+        )
+
+    for field, value in changes.items():
+        setattr(item, field, value)
+
+    # A count is what moves this field; a reorder-point change is policy, not a count.
+    if "quantity_on_hand" in changes:
+        item.last_counted_at = datetime.now(UTC).isoformat()
+
+    # Availability is derived, never patched -- recomputed on every accepted patch
+    # so GET /inventory/low-stock cannot drift out of sync with on-hand.
+    item.quantity_available = item.quantity_on_hand - item.quantity_allocated
+
+    await session.commit()
+    await session.refresh(item)
+    return InventoryItem.model_validate(item)

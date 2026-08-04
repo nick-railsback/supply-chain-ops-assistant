@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import Field
 
-from models.shared import ApiModel
+from models.shared import ApiModel, StrictPatch
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -75,3 +75,16 @@ class UtilizationStats(ApiModel):
     current_utilization: float
     units_used: int
     units_available: int
+
+
+# ---------------------------------------------------------------------------
+# Patch request models (the WMS PATCH contract)
+# ---------------------------------------------------------------------------
+
+
+class InventoryPatch(StrictPatch):
+    # quantity_allocated follows from orders and quantity_available is derived
+    # from the other two, so neither is the caller's to set: both are rejected
+    # by being absent here.
+    quantity_on_hand: int | None = Field(default=None, ge=0)
+    reorder_point: int | None = Field(default=None, ge=0)

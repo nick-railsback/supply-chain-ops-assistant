@@ -329,6 +329,16 @@ class OpsClient:
         resp = await self._request(self._wms, "GET", "/stats/utilization", service="wms")
         return [FulfillmentCenter(**item) for item in resp.json()]
 
+    async def update_inventory(self, inventory_id: str, changes: dict[str, Any]) -> InventoryItem:
+        resp = await self._request(
+            self._wms,
+            "PATCH",
+            f"/inventory/{inventory_id}",
+            service="wms",
+            json=changes,
+        )
+        return InventoryItem(**resp.json())
+
     # ==================================================================
     # TMS methods
     # ==================================================================
