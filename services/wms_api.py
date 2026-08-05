@@ -259,7 +259,21 @@ async def update_inventory(
 
     # exclude_unset distinguishes "field absent" from "field sent as null", and
     # absent is what decides whether this patch counts as a stock count below.
-    changes = {k: v for k, v in body.model_dump(exclude_unset=True).items() if v is not None}
+    changes = body.model_dump(exclude_unset=True)
+
+    # A field named with no value is a caller error, not a request to leave it
+    # alone -- omitting it is how you do that. Dropping it here would answer
+    # 200 to a caller who sent a count, having stored nothing and stamped no
+    # count, and they would have no way to tell.
+    nulled = sorted(field for field, value in changes.items() if value is None)
+    if nulled:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Fields {nulled} were sent as null; omit a field to leave it "
+                f"unchanged, or give it a value"
+            ),
+        )
 
     # Reject before writing anything: a refused patch must leave the row intact.
     new_on_hand = changes.get("quantity_on_hand")

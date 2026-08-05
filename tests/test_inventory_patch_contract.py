@@ -95,6 +95,30 @@ class TestPatchableFields:
 
         assert await _read(wms_client, TARGET) == before
 
+    @pytest.mark.parametrize("field", ["quantity_on_hand", "reorder_point"])
+    async def test_a_field_sent_as_null_is_refused_not_dropped(self, wms_client, field):
+        # Naming a field and giving it no value is a caller error, not a
+        # request to leave it alone -- the way to leave it alone is to omit it.
+        # Answering 200 here tells a caller who sent a count that it landed.
+        before = await _read(wms_client, TARGET)
+
+        resp = await wms_client.patch(f"/inventory/{TARGET}", json={field: None})
+        assert resp.status_code == 422
+        assert field in resp.text
+
+        assert await _read(wms_client, TARGET) == before
+
+    async def test_a_null_alongside_a_real_change_poisons_the_whole_body(self, wms_client):
+        before = await _read(wms_client, TARGET)
+
+        resp = await wms_client.patch(
+            f"/inventory/{TARGET}",
+            json={"quantity_on_hand": 450, "reorder_point": None},
+        )
+        assert resp.status_code == 422
+
+        assert await _read(wms_client, TARGET) == before
+
     async def test_unsupported_field_poisons_the_whole_body(self, wms_client):
         # A body that mixes a legal change with an illegal one is refused
         # outright; the legal half must not land on its own.
