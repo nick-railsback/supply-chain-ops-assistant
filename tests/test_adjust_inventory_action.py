@@ -27,12 +27,13 @@ from agent.action_handler import (
     format_proposal_summary,
     propose_action,
 )
-from agent.validators import validate_action_proposal
+from agent.validators import _PATCHABLE_FIELDS, ID_PREFIX_ROUTING, validate_action_proposal
 from cli.interactive import display_action_proposal
 from config.settings import get_settings
 from models.action import ActionProposal, ActionType
 from models.shared import RiskLevel
 from models.wms import InventoryItem, InventoryPatch
+from services.client import OpsClient
 
 # Inventory records the warehouse service under test starts with. INV-00000001
 # holds 500 on hand / 100 allocated / 400 available, reorder point 50.
@@ -569,6 +570,37 @@ class TestRequestRecognition:
 
 
 class TestBulkInventoryTargets:
+    async def test_every_prefix_the_validator_routes_by_is_one_the_dispatcher_can_write(self):
+        # Iterated over the routing map rather than a hand-written list, so an
+        # entity registered later cannot validate against a contract and then
+        # fail to route -- the failure the operator only sees after approving.
+        assert ID_PREFIX_ROUTING, "no id prefix routes anywhere at all"
+
+        for prefix, (entity, method) in ID_PREFIX_ROUTING.items():
+            # Against the real class, not the mock below: a mock answers to any
+            # method name, so only this catches one that does not exist.
+            assert hasattr(OpsClient, method), (
+                f"{prefix} routes to OpsClient.{method}, which does not exist"
+            )
+            assert entity in _PATCHABLE_FIELDS, (
+                f"{prefix} routes to entity '{entity}', which has no PATCH contract"
+            )
+
+            client = AsyncMock()
+            result = await execute_action(
+                client,
+                _proposal(ActionType.BULK_UPDATE, [f"{prefix}-0001"], {"a_field": "a value"}),
+                confirmed=True,
+            )
+
+            assert result.failed == [], (
+                f"the validator routes {prefix} to {entity}, but the dispatcher "
+                f"cannot write it: {result.failed}"
+            )
+            assert getattr(client, method).await_count == 1, (
+                f"{prefix} was routed somewhere other than OpsClient.{method}"
+            )
+
     async def test_a_bulk_inventory_change_is_checked_against_the_contract(self):
         proposal = _proposal(ActionType.BULK_UPDATE, [STORED_RECORD], {"quantity_allocated": 5})
 

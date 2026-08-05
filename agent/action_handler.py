@@ -16,6 +16,7 @@ from typing import Any
 from agent.llm import LLMUnavailable, structured_call
 from agent.validators import (
     ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE,
+    ID_PREFIX_ROUTING,
     mutated_entities,
     target_prefixes,
     validate_action_proposal,
@@ -682,18 +683,15 @@ async def _dispatch_action(
         await client.update_inventory(target_id, changes)
 
     elif action_type == ActionType.BULK_UPDATE:
-        # Bulk update: try to infer the entity type from the target ID prefix
-        if target_id.startswith("ORD"):
-            await client.update_order(target_id, changes)
-        elif target_id.startswith("EXC"):
-            await client.update_exception(target_id, changes)
-        elif target_id.startswith("SHP"):
-            await client.update_shipment(target_id, changes)
-        elif target_id.startswith("INV"):
-            await client.update_inventory(target_id, changes)
-        else:
+        # Routed by the same map the validator picks a PATCH contract with, so
+        # a target it admits is always one this can write. A hand-written
+        # branch here would have to be kept in step with that map by hand, and
+        # the failure of doing so lands after human approval.
+        routing = ID_PREFIX_ROUTING.get(target_id[:3])
+        if routing is None:
             raise ValueError(
                 f"Cannot route bulk update for target '{target_id}': unknown ID prefix."
             )
+        await getattr(client, routing[1])(target_id, changes)
     else:
         raise ValueError(f"Unsupported action type: {action_type}")

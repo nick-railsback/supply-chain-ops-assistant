@@ -135,12 +135,24 @@ _ACTION_ENTITY: dict[ActionType, str] = {
     ActionType.ADJUST_INVENTORY: "inventory",
 }
 
-# BULK_UPDATE routes per target by id prefix (same map _dispatch_action uses).
+# Where a target id goes, by prefix: the entity whose PATCH contract its
+# changes are checked against, and the OpsClient method that writes it.
+#
+# BULK_UPDATE routes per target by prefix, and both surfaces read this map --
+# the validator to pick a contract, action_handler._dispatch_action to pick a
+# call. Registering an entity in only one of them is the defect this closes:
+# the validator admits a target it has checked against nothing, the operator
+# approves it, and the dispatcher then refuses it with "unknown ID prefix"
+# after approval, landing the whole batch in ActionResult.failed.
+ID_PREFIX_ROUTING: dict[str, tuple[str, str]] = {
+    "ORD": ("order", "update_order"),
+    "EXC": ("exception", "update_exception"),
+    "SHP": ("shipment", "update_shipment"),
+    "INV": ("inventory", "update_inventory"),
+}
+
 _ID_PREFIX_ENTITY: dict[str, str] = {
-    "ORD": "order",
-    "EXC": "exception",
-    "SHP": "shipment",
-    "INV": "inventory",
+    prefix: entity for prefix, (entity, _method) in ID_PREFIX_ROUTING.items()
 }
 
 # ---------------------------------------------------------------------------
