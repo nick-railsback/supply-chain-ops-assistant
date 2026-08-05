@@ -272,6 +272,64 @@ class TestCountTimestamp:
 
 
 # ---------------------------------------------------------------------------
+# `updated_at` records that the row was written to at all, whichever field
+# moved. Without it a policy change leaves a record indistinguishable from one
+# that was seeded that way, and nobody investigating a shifted low-stock view
+# can tell whether a mutation happened or when.
+# ---------------------------------------------------------------------------
+
+
+class TestMutationTimestamp:
+    async def test_a_record_carries_one(self):
+        # Guards the tests below: they would all pass vacuously on a KeyError
+        # if the field were simply absent from the record.
+        assert "updated_at" in InventoryItem.model_fields
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"reorder_point": 75},
+            {"quantity_on_hand": 450},
+            {"quantity_on_hand": 450, "reorder_point": 75},
+        ],
+        ids=["reorder-only", "on-hand-only", "both"],
+    )
+    async def test_every_patch_that_writes_something_is_dated(self, wms_client, body):
+        before = await _read(wms_client, TARGET)
+        assert before["updated_at"] is None, "a seeded row was already dated"
+
+        resp = await wms_client.patch(f"/inventory/{TARGET}", json=body)
+        assert resp.status_code == 200
+
+        stored = await _read(wms_client, TARGET)
+        assert stored["updated_at"] is not None, f"{body} left no trace it ever happened"
+
+    async def test_a_patch_that_writes_nothing_is_not_dated(self, wms_client):
+        resp = await wms_client.patch(f"/inventory/{TARGET}", json={})
+        assert resp.status_code == 200
+
+        assert (await _read(wms_client, TARGET))["updated_at"] is None
+
+    async def test_a_refused_patch_is_not_dated(self, wms_client):
+        before = await _read(wms_client, TARGET)
+
+        resp = await wms_client.patch(f"/inventory/{TARGET}", json={"quantity_on_hand": 0})
+        assert resp.status_code == 422
+
+        assert await _read(wms_client, TARGET) == before
+
+    async def test_the_caller_cannot_supply_the_timestamp(self, wms_client):
+        before = await _read(wms_client, TARGET)
+
+        resp = await wms_client.patch(
+            f"/inventory/{TARGET}", json={"updated_at": "2030-01-01T00:00:00"}
+        )
+        assert resp.status_code == 422
+
+        assert await _read(wms_client, TARGET) == before
+
+
+# ---------------------------------------------------------------------------
 # The low-stock view reads the derived availability column, so a write that
 # changes availability has to change what the view reports -- in both
 # directions, and exactly at the reorder-point boundary.

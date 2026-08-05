@@ -52,6 +52,10 @@ class InventoryItem(ApiModel):
     reorder_point: int
     last_counted_at: datetime
     category: str
+    # When this row was last written to, whichever field moved; None on a row
+    # that has never been patched. last_counted_at dates a physical count, so
+    # it cannot serve as the record that a mutation happened.
+    updated_at: datetime | None = None
 
 
 class StockMovement(ApiModel):

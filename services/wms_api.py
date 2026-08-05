@@ -53,6 +53,11 @@ class InventoryORM(Base):
     reorder_point: Mapped[int] = mapped_column(Integer)
     last_counted_at: Mapped[str] = mapped_column(String)
     category: Mapped[str] = mapped_column(String)
+    # When the row was last written to, whichever field moved. Null on a row
+    # that has never been patched, so a seeded value is distinguishable from a
+    # changed one -- last_counted_at cannot carry that, since it dates a
+    # physical count and a reorder-point change is not one.
+    updated_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class StockMovementORM(Base):
@@ -292,6 +297,13 @@ async def update_inventory(
     # A count is what moves this field; a reorder-point change is policy, not a count.
     if "quantity_on_hand" in changes:
         item.last_counted_at = datetime.now(UTC).isoformat()
+
+    # Every patch that writes something is dated, the way patch_order dates an
+    # order. A reorder-point change stamps no count, so without this it would
+    # leave the row indistinguishable from one seeded that way. A body naming
+    # no field asked for nothing and is not a mutation to record.
+    if changes:
+        item.updated_at = datetime.now(UTC).isoformat()
 
     # Availability is derived, never patched -- recomputed on every accepted patch
     # so GET /inventory/low-stock cannot drift out of sync with on-hand.
