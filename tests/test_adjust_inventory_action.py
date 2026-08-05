@@ -96,7 +96,11 @@ def _proposal(
 
 
 def _inventory_rows(count, changes=None):
-    """Context rows as an inventory query returns them, newest id first."""
+    """Context rows as an inventory query returns them, in ascending id order.
+
+    Order is load-bearing: the rule path reads the requested change off the
+    first row, so ``rows[0]`` is INV-000001.
+    """
     rows = [
         {
             "inventory_id": f"INV-{i:06d}",
