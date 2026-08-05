@@ -63,8 +63,6 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
     ActionType.ESCALATE_ORDER: [
         "escalate order",
         "escalate",
-        "priority",
-        "urgent",
     ],
     ActionType.FLAG_SHIPMENTS: [
         "flag shipment",
@@ -82,6 +80,16 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
         "bulk update",
         "update all",
         "batch update",
+    ],
+}
+
+# Words that say how urgently, not what to do. They turn up in requests about
+# every entity ("urgent: recount SKU-A100"), so they name an escalation only
+# when nothing in the query names an action of its own.
+_URGENCY_KEYWORDS: dict[ActionType, list[str]] = {
+    ActionType.ESCALATE_ORDER: [
+        "priority",
+        "urgent",
     ],
 }
 
@@ -248,13 +256,23 @@ def _status_by_target(relevant_data: list[dict[str, Any]]) -> dict[str, str]:
 def _detect_action_type(user_query: str) -> ActionType:
     """Match *user_query* against keyword lists to pick an ActionType.
 
+    The longest matching keyword wins, so a phrase naming an action beats a
+    shorter one contained in the same query; registration order only breaks
+    ties. Urgency words are consulted only when nothing else matched, so
+    "urgent: recount SKU-A100" is read as the recount it is.
+
     Falls back to ``BULK_UPDATE`` when no keywords match.
     """
     query_lower = user_query.lower()
-    for action_type, keywords in _ACTION_KEYWORDS.items():
-        for kw in keywords:
-            if kw in query_lower:
-                return action_type
+    for keywords in (_ACTION_KEYWORDS, _URGENCY_KEYWORDS):
+        matched: list[tuple[int, ActionType]] = [
+            (len(kw), action_type)
+            for action_type, kws in keywords.items()
+            for kw in kws
+            if kw in query_lower
+        ]
+        if matched:
+            return max(matched, key=lambda m: m[0])[1]
     return ActionType.BULK_UPDATE
 
 

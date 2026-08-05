@@ -73,6 +73,14 @@ class TestDetectActionType:
         result = _detect_action_type("assign exception to Sarah Chen")
         assert result == ActionType.ASSIGN_EXCEPTION
 
+    def test_detect_action_type_urgency_alone_still_escalates(self):
+        """Urgency is a weak signal, but it is still the only one here."""
+        result = _detect_action_type("this order is urgent")
+        assert result == ActionType.ESCALATE_ORDER
+
+        result = _detect_action_type("make ORD-2025-0001 a priority")
+        assert result == ActionType.ESCALATE_ORDER
+
     def test_detect_action_type_escalate(self):
         result = _detect_action_type("escalate this order immediately")
         assert result == ActionType.ESCALATE_ORDER

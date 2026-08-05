@@ -467,6 +467,24 @@ class TestRequestRecognition:
         assert proposal.action_type != ActionType.BULK_UPDATE
         assert proposal.action_type != ActionType.ESCALATE_ORDER
 
+    @pytest.mark.parametrize(
+        "query",
+        [
+            "urgent: adjust inventory count for SKU-A100 to 450",
+            "recount SKU-A100, it's a priority",
+            "urgent inventory recount at FC-EAST",
+        ],
+    )
+    async def test_saying_it_is_urgent_does_not_make_it_an_escalation(self, query):
+        # "urgent" and "priority" say how soon, not what to do. An operator in
+        # a hurry still gets the adjustment they asked for -- not an order
+        # escalation, and not a validation error for naming no order.
+        rows = _inventory_rows(1, changes={"quantity_on_hand": 450})
+
+        proposal = await propose_action(None, query, rows)
+
+        assert proposal.action_type == _adjust_inventory()
+
 
 # ---------------------------------------------------------------------------
 # Bulk routing: a bulk change either handles inventory targets on both sides --
