@@ -225,7 +225,10 @@ class TestProposeActionLLM:
         call = AsyncMock(side_effect=RuntimeError("boom"))
         with patch("agent.action_handler.structured_call", call):
             proposal = await propose_action(
-                None, "assign exception EXC-001 to Sarah Chen", [{"exception_id": "EXC-001"}]
+                None,
+                "assign exception EXC-001 to Sarah Chen",
+                # The rule path takes its change off the first context row.
+                [{"exception_id": "EXC-001", "changes": {"assigned_to": "Sarah Chen"}}],
             )
 
         # Fell back to the rule path, which builds reasoning from the query.
@@ -585,7 +588,7 @@ class TestFallbackTargets:
         monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
 
         rows = [
-            {"exception_id": "EXC-0001"},
+            {"exception_id": "EXC-0001", "changes": {"status": "resolved"}},
             {"order_id": "ORD-2025-0001"},
             {"shipment_id": "SHP-20250301-00001"},
         ]

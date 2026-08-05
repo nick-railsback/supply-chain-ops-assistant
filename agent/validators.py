@@ -118,6 +118,14 @@ _PATCHABLE_FIELDS: dict[str, frozenset[str]] = {
     "inventory": frozenset(InventoryPatch.model_fields),
 }
 
+# The only actions whose change the dispatcher supplies itself (escalation
+# sets priority, flagging sets flagged), so their proposals may legitimately
+# name none. Every other action takes its change from the caller: an empty
+# dict there PATCHes nothing and is still reported to the operator as applied.
+ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE: frozenset[ActionType] = frozenset(
+    {ActionType.ESCALATE_ORDER, ActionType.FLAG_SHIPMENTS}
+)
+
 _ACTION_ENTITY: dict[ActionType, str] = {
     ActionType.UPDATE_ORDER_STATUS: "order",
     ActionType.ESCALATE_ORDER: "order",
@@ -282,6 +290,17 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
         errors.append(
             f"Action affects {len(proposal.target_ids)} entities, "
             f"exceeding the cap of {settings.bulk_update_cap}."
+        )
+
+    # An action naming no change would modify nothing and still be reported as
+    # applied, so it is refused while it is still a proposal.
+    supplies_own_change = proposal.action_type in ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE
+    if not proposal.changes and not supplies_own_change:
+        entity = _ACTION_ENTITY.get(proposal.action_type)
+        fields = sorted(_PATCHABLE_FIELDS[entity]) if entity else "the target's patchable fields"
+        errors.append(
+            f"Action '{proposal.action_type.value}' names no change; it would modify "
+            f"nothing and still be reported as applied. Name the fields to set: {fields}."
         )
 
     # Changes must be expressible by the target entity's PATCH contract — the

@@ -136,8 +136,11 @@ class TestActionTypeRouting:
             reached = False
             for target in CANDIDATE_TARGETS:
                 client = AsyncMock()
+                # The dispatcher routes; it does not judge field names. Any
+                # change will do, so long as there is one -- a changeless
+                # request is refused before it reaches a backend at all.
                 result = await execute_action(
-                    client, _proposal(action_type, [target], {}), confirmed=True
+                    client, _proposal(action_type, [target], {"a_field": "a value"}), confirmed=True
                 )
                 unsupported = [
                     failure
@@ -251,8 +254,8 @@ class TestRiskFloor:
     @pytest.mark.parametrize("record_count", [1, 2, 5, 6, 11])
     @pytest.mark.parametrize(
         "changes",
-        [{"quantity_on_hand": 450}, {"reorder_point": 25}, {}],
-        ids=["on-hand", "reorder-point", "no-change"],
+        [{"quantity_on_hand": 450}, {"reorder_point": 25}],
+        ids=["on-hand", "reorder-point"],
     )
     async def test_no_adjustment_is_ever_graded_low(self, record_count, changes):
         rows = _inventory_rows(record_count, changes=changes)
@@ -260,6 +263,48 @@ class TestRiskFloor:
 
         assert proposal.risk_level != RiskLevel.LOW
         assert proposal.requires_confirmation is True
+
+
+# ---------------------------------------------------------------------------
+# An adjustment that names no change is a no-op wearing a success message. The
+# operator reads "adjusted" and the count on the shelf never moved, so the
+# pipeline refuses it -- while proposing, and again at the write itself, since
+# a proposal can be built anywhere.
+# ---------------------------------------------------------------------------
+
+
+class TestAnAdjustmentAlwaysCarriesAChange:
+    async def test_warehouse_rows_as_the_copilot_fetches_them_propose_no_no_op(self, ops_client):
+        # The rows a query really puts in front of the reasoner: inventory
+        # records dumped straight off the service, carrying no requested change.
+        listing = await ops_client.list_inventory(limit=200)
+        rows = [item.model_dump(mode="json") for item in listing.items]
+        assert rows, "the warehouse under test holds no inventory to adjust"
+
+        with pytest.raises(ValueError) as raised:
+            await propose_action(ops_client, ADJUST_QUERY, rows)
+
+        # The operator has to learn what was missing, not just that it failed.
+        assert "change" in str(raised.value).lower()
+
+    async def test_an_adjustment_naming_no_change_is_refused_while_still_a_proposal(self):
+        proposal = _proposal(_adjust_inventory(), [SEEDED_ID], {})
+
+        errors = await validate_action_proposal(proposal)
+
+        assert errors, "an adjustment that changes nothing was accepted as a proposal"
+
+    async def test_a_changeless_adjustment_is_never_reported_as_a_success(self, ops_client):
+        proposal = _proposal(_adjust_inventory(), [STORED_RECORD], {})
+        before = await _stored(ops_client)
+
+        result = await execute_action(ops_client, proposal, confirmed=True)
+
+        assert await _stored(ops_client) == before
+        assert result.successful == [], (
+            "the operator was told an adjustment landed on "
+            f"{result.successful} while the record never moved"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -381,7 +426,12 @@ class TestTargeting:
 
     async def test_only_inventory_rows_of_a_mixed_context_become_targets(self):
         rows = [
-            {"order_id": "ORD-2025-0001", "status": "pending"},
+            {
+                "order_id": "ORD-2025-0001",
+                "status": "pending",
+                # The rule path takes its change off the first context row.
+                "changes": {"quantity_on_hand": 450},
+            },
             {"inventory_id": "INV-000001", "sku": "SKU-A100"},
             {"exception_id": "EXC-0001", "status": "open"},
             {"inventory_id": "INV-000002", "sku": "SKU-B200"},

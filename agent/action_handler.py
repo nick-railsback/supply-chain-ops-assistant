@@ -14,7 +14,10 @@ import time
 from typing import Any
 
 from agent.llm import LLMUnavailable, structured_call
-from agent.validators import validate_action_proposal
+from agent.validators import (
+    ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE,
+    validate_action_proposal,
+)
 from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER
 from models.action import ActionProposal, ActionResult, ActionType
 from models.shared import RiskLevel
@@ -510,6 +513,16 @@ async def _dispatch_action(
     changes: dict[str, Any],
 ) -> None:
     """Route a single target's action to the appropriate OpsClient method."""
+    # Last stop before the wire: a changeless PATCH is accepted by the services
+    # and would land in ActionResult.successful, telling the operator a mutation
+    # they approved took effect when nothing moved. Only the two actions the
+    # dispatcher supplies a change for below may arrive empty.
+    if not changes and action_type not in ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE:
+        raise ValueError(
+            f"Refusing to {action_type.value} '{target_id}': no change was named, so the "
+            f"request would modify nothing and still be reported as applied."
+        )
+
     if action_type == ActionType.UPDATE_ORDER_STATUS:
         await client.update_order(target_id, changes)
 
