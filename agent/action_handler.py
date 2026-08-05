@@ -16,6 +16,7 @@ from typing import Any
 from agent.llm import LLMUnavailable, structured_call
 from agent.validators import (
     ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE,
+    mutated_entities,
     validate_action_proposal,
 )
 from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER
@@ -92,6 +93,10 @@ _IRREVERSIBLE_STATUSES = frozenset({"cancelled", "returned"})
 # Changes touching money force HIGH risk regardless of target count.
 _FINANCIAL_FIELDS = frozenset({"order_value", "shipping_cost"})
 
+# Entities no single-target write to is routine, whatever action type carries
+# it. A count restated on the shelf is not reversible by re-running anything.
+_MEDIUM_FLOOR_ENTITIES = frozenset({"inventory"})
+
 _MEDIUM_TARGET_MAX = 10  # <= this -> MEDIUM; above -> HIGH
 _AUTO_CONFIRM_TARGET_MAX = 5  # LOW risk above this still requires confirmation
 _RISK_ORDER = {RiskLevel.LOW: 0, RiskLevel.MEDIUM: 1, RiskLevel.HIGH: 2}
@@ -113,19 +118,25 @@ PROPOSE_ACTION_SYSTEM_PROMPT = PROPOSE_ACTION_SYSTEM.format(
 
 
 def _assess_risk(
-    target_count: int,
+    target_ids: list[str],
     changes: dict[str, Any],
     action_type: ActionType | None = None,
 ) -> RiskLevel:
-    """Determine risk level from target count and change characteristics.
+    """Determine risk level from the targets and the change characteristics.
 
     Rules:
       - 1 target → LOW
       - 2–10 targets → MEDIUM
       - >10 targets → HIGH
-      - Escalations and inventory adjustments → at least MEDIUM
+      - Escalations, and anything writing to an inventory record → at least
+        MEDIUM
       - Irreversible status transitions → HIGH (override)
       - Financial-field changes → HIGH (override)
+
+    The inventory floor keys on the entity the write lands on, not on the
+    action's label: restating a physical count is never routine, so reaching
+    an inventory record through bulk_update cannot buy a lower gate than
+    adjust_inventory would have.
     """
     new_status = changes.get("status", "")
     if isinstance(new_status, str) and new_status in _IRREVERSIBLE_STATUSES:
@@ -133,12 +144,14 @@ def _assess_risk(
     if _FINANCIAL_FIELDS & changes.keys():
         return RiskLevel.HIGH
 
+    target_count = len(target_ids)
     if target_count > _MEDIUM_TARGET_MAX:
         return RiskLevel.HIGH
-    if target_count > 1 or action_type in {
-        ActionType.ESCALATE_ORDER,
-        ActionType.ADJUST_INVENTORY,
-    }:
+    if (
+        target_count > 1
+        or action_type == ActionType.ESCALATE_ORDER
+        or _MEDIUM_FLOOR_ENTITIES & mutated_entities(action_type, target_ids)
+    ):
         return RiskLevel.MEDIUM
     return RiskLevel.LOW
 
@@ -158,7 +171,7 @@ def _apply_risk_floor(
     cannot carry a lowered gate past the floor.
     """
     target_count = len(target_ids)
-    risk = _assess_risk(target_count, changes, action_type)
+    risk = _assess_risk(target_ids, changes, action_type)
     if isinstance(claimed_risk, str) and claimed_risk in {r.value for r in RiskLevel}:
         claimed_risk = RiskLevel(claimed_risk)
     if isinstance(claimed_risk, RiskLevel):

@@ -491,6 +491,33 @@ class TestBulkInventoryTargets:
         # cannot accept, or the target itself is named as one bulk won't carry.
         assert any("quantity_allocated" in e or "INV" in e for e in errors)
 
+    async def test_a_bulk_change_reaching_one_inventory_record_is_still_gated(self):
+        # The same mutation under a different label. Relabelling an adjustment
+        # as a bulk change must not buy it a lower gate.
+        rows = _inventory_rows(1, changes={"quantity_on_hand": 0})
+
+        proposal = await propose_action(None, "bulk update stock levels", rows)
+
+        assert proposal.action_type == ActionType.BULK_UPDATE
+        assert proposal.risk_level == RiskLevel.MEDIUM
+        assert proposal.requires_confirmation is True
+
+    async def test_an_unconfirmed_bulk_change_to_inventory_writes_nothing(self, ops_client):
+        # A change the warehouse would accept, so what stops it is the gate.
+        proposal = _proposal(
+            ActionType.BULK_UPDATE,
+            [STORED_RECORD],
+            {"quantity_on_hand": 450},
+            risk_level=RiskLevel.LOW,
+            requires_confirmation=False,
+        )
+        before = await _stored(ops_client)
+
+        with pytest.raises(ActionNotConfirmedError):
+            await execute_action(ops_client, proposal)
+
+        assert await _stored(ops_client) == before
+
     async def test_what_the_validator_admits_is_what_the_dispatcher_routes(self, ops_client):
         proposal = _proposal(ActionType.BULK_UPDATE, [STORED_RECORD], {"quantity_on_hand": 450})
 

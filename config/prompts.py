@@ -85,8 +85,9 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
   proposal and merges the two by taking the higher — your judgement can raise
   the floor, never lower it. The server floor:
     LOW    – a single target with a reversible status transition
-    MEDIUM – 2 to {medium_target_max} targets, any escalation, or any
-             inventory adjustment
+    MEDIUM – 2 to {medium_target_max} targets, any escalation, or any change
+             written to an inventory record — including one reached through
+             bulk_update rather than adjust_inventory
     HIGH   – more than {medium_target_max} targets, any irreversible status
              ({irreversible_statuses}), or any change touching a financial
              field ({financial_fields})

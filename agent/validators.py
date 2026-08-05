@@ -163,6 +163,20 @@ ORDER_STATUS_TRANSITIONS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 
 
+def mutated_entities(action_type: ActionType | None, target_ids: list[str]) -> set[str]:
+    """The entities a proposal's targets will actually be written to.
+
+    An action bound to one entity answers from ``_ACTION_ENTITY``; bulk_update
+    routes per target by id prefix, so its entities are read off the ids
+    themselves. The single answer to "what does this proposal touch?", so the
+    change validator and the risk floor cannot disagree about it.
+    """
+    entity = _ACTION_ENTITY.get(action_type) if action_type is not None else None
+    if entity is not None:
+        return {entity}
+    return {_ID_PREFIX_ENTITY[tid[:3]] for tid in target_ids if tid[:3] in _ID_PREFIX_ENTITY}
+
+
 def _effective_entity(system: str, primary_entity: str) -> str:
     """The entity the dispatcher will actually query for *system*.
 
@@ -307,16 +321,7 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
     # services forbid unknown fields (422), so rejecting here keeps a doomed
     # proposal from passing human confirmation first.
     if proposal.changes:
-        entity = _ACTION_ENTITY.get(proposal.action_type)
-        entities = (
-            {entity}
-            if entity is not None
-            else {
-                _ID_PREFIX_ENTITY[tid[:3]]
-                for tid in proposal.target_ids
-                if tid[:3] in _ID_PREFIX_ENTITY
-            }
-        )
+        entities = mutated_entities(proposal.action_type, proposal.target_ids)
         for ent in sorted(entities):
             unknown = sorted(set(proposal.changes) - _PATCHABLE_FIELDS[ent])
             if unknown:
