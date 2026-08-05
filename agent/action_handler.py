@@ -204,6 +204,87 @@ _ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
 }
 
 
+# What an operator can actually see for a row, keyed by the row's id field and
+# listed in reading order. cli.format_inventory_table shows SKU, product,
+# center, availability and on-hand — never the inventory_id — so an inventory
+# record is named in the query, and named back in the confirmation panel, by
+# its SKU and center. Rows whose id an operator does read (orders, exceptions,
+# shipments) need no entry.
+_OPERATOR_VISIBLE_FIELDS: dict[str, tuple[str, ...]] = {
+    "inventory_id": ("sku", "fulfillment_center_id"),
+}
+
+
+def _identify(row: dict[str, Any], id_fields: tuple[str, ...]) -> tuple[str, str] | None:
+    """The (id field, id) a row contributes for *id_fields*, or None."""
+    for id_field in id_fields:
+        if id_field in row:
+            return id_field, str(row[id_field])
+    return None
+
+
+def _rows_named_by_query(
+    user_query: str,
+    relevant_data: list[dict[str, Any]],
+    id_fields: tuple[str, ...],
+) -> list[dict[str, Any]] | None:
+    """Rows the query singles out by an identifier the operator can see.
+
+    A field constrains only when the query names one of its values, so
+    "recount SKU-A100" keeps that SKU at every center while "recount SKU-A100
+    at FC-WEST" keeps one row. Returns None when the query names none of them
+    and therefore narrows nothing.
+    """
+    query_lower = user_query.lower()
+    named: dict[str, set[str]] = {}
+    for row in relevant_data:
+        identified = _identify(row, id_fields)
+        if identified is None:
+            continue
+        for field in _OPERATOR_VISIBLE_FIELDS.get(identified[0], ()):
+            value = row.get(field)
+            if value is None:
+                continue
+            text = str(value).lower()
+            if re.search(rf"\b{re.escape(text)}\b", query_lower):
+                named.setdefault(field, set()).add(text)
+
+    if not named:
+        return None
+    return [
+        row
+        for row in relevant_data
+        if all(str(row.get(field, "")).lower() in values for field, values in named.items())
+    ]
+
+
+def _target_labels(
+    relevant_data: list[dict[str, Any]],
+    id_fields: tuple[str, ...],
+    target_ids: list[str],
+) -> dict[str, str] | None:
+    """Describe each target in the words the operator reads it by.
+
+    Display-only, and only for entities whose id names nothing to them. A
+    target with no row behind it is simply left unlabelled.
+    """
+    wanted = set(target_ids)
+    labels: dict[str, str] = {}
+    for row in relevant_data:
+        identified = _identify(row, id_fields)
+        if identified is None or identified[1] not in wanted:
+            continue
+        id_field, entity_id = identified
+        parts = [
+            str(row[field])
+            for field in _OPERATOR_VISIBLE_FIELDS.get(id_field, ())
+            if row.get(field) is not None
+        ]
+        if parts:
+            labels[entity_id] = " @ ".join(parts)
+    return labels or None
+
+
 def _fallback_target_ids(
     user_query: str,
     relevant_data: list[dict[str, Any]],
@@ -212,8 +293,10 @@ def _fallback_target_ids(
     """Pick the rule path's targets without fanning out across the context.
 
     Ids named explicitly in the query win, intersected with the context so a
-    typo can't target an unfetched row. Otherwise only rows carrying the id
-    field of the action's entity become targets — a context of mixed entities
+    typo can't target an unfetched row. Failing that, an identifier the
+    operator can actually see (a SKU, a fulfillment center) narrows the rows.
+    Only then does the whole context become targets, and even then only rows
+    carrying the id field of the action's entity — a context of mixed entities
     never all becomes targets of a single action.
 
     Only ids the action could actually write to count as explicit. An id from
@@ -223,15 +306,21 @@ def _fallback_target_ids(
     the target list.
     """
     id_fields = _ACTION_ID_FIELDS[action_type]
-    context_ids: list[str] = []
-    for row in relevant_data:
-        for id_field in id_fields:
-            if id_field in row:
-                context_ids.append(str(row[id_field]))
-                break
-
     writable = target_prefixes(action_type)
     explicit = [eid for eid in _ENTITY_ID_PATTERN.findall(user_query) if eid[:3] in writable]
+
+    rows = relevant_data
+    if not explicit:
+        narrowed = _rows_named_by_query(user_query, rows, id_fields)
+        if narrowed:
+            rows = narrowed
+
+    context_ids: list[str] = []
+    for row in rows:
+        identified = _identify(row, id_fields)
+        if identified is not None:
+            context_ids.append(identified[1])
+
     if explicit:
         context_set = set(context_ids)
         return [eid for eid in explicit if eid in context_set]
@@ -315,8 +404,10 @@ async def propose_action(
         schema = ActionProposal.model_json_schema()
         # The model grades its own risk_level / requires_confirmation —
         # merged below with the server floor, raise-only. The validator-only
-        # current_statuses ground truth must never come from the model.
+        # current_statuses ground truth, and the target_labels the operator
+        # reads before approving, must never come from the model.
         schema.get("properties", {}).pop("current_statuses", None)
+        schema.get("properties", {}).pop("target_labels", None)
         # Only the call itself may degrade to the rule path: a proposal the
         # validator rejects must surface to the operator as an error, never
         # silently become a different proposal.
@@ -352,8 +443,15 @@ async def propose_action(
                 claimed_confirm,
             )
             # Mirror the rule path: the transition validator needs each target's
-            # current status, which the model must never supply itself.
+            # current status, and the operator needs each target described in
+            # words they recognise. Both are read off the queried context here;
+            # neither may be supplied by the model.
             data.pop("current_statuses", None)
+            data["target_labels"] = _target_labels(
+                relevant_data,
+                _ACTION_ID_FIELDS.get(proposed_type, ()) if proposed_type else (),
+                [str(tid) for tid in data.get("target_ids", [])],
+            )
             if data.get("action_type") == ActionType.UPDATE_ORDER_STATUS.value and data.get(
                 "changes", {}
             ).get("status"):
@@ -407,6 +505,7 @@ async def propose_action(
         risk_level=risk,
         requires_confirmation=requires_confirmation,
         current_statuses=current_statuses,
+        target_labels=_target_labels(relevant_data, _ACTION_ID_FIELDS[action_type], target_ids),
     )
 
     errors = await validate_action_proposal(proposal)

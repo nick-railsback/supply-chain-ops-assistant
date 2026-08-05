@@ -13,10 +13,12 @@ consults a live model: the proposal path is pinned to its deterministic
 rule-based branch for every test in this module.
 """
 
+import io
 import re
 from unittest.mock import AsyncMock
 
 import pytest
+from rich.console import Console
 
 from agent.action_handler import (
     PROPOSE_ACTION_SYSTEM_PROMPT,
@@ -26,6 +28,7 @@ from agent.action_handler import (
     propose_action,
 )
 from agent.validators import validate_action_proposal
+from cli.interactive import display_action_proposal
 from config.settings import get_settings
 from models.action import ActionProposal, ActionType
 from models.shared import RiskLevel
@@ -46,6 +49,9 @@ CANDIDATE_TARGETS = ("ORD-2025-0001", "EXC-0001", "SHP-20250301-00001", SEEDED_I
 
 # A phrasing that asks, in plain words, for a stock count to be adjusted.
 ADJUST_QUERY = "adjust inventory count for SKU-A100 to 450"
+
+# The same ask with nothing singled out -- no SKU, no center, no id.
+BROAD_ADJUST_QUERY = "adjust inventory counts"
 
 
 @pytest.fixture(autouse=True)
@@ -103,6 +109,30 @@ def _inventory_rows(count, changes=None):
         # The rule path reads the requested change off the first context row.
         rows[0]["changes"] = changes
     return rows
+
+
+# Context rows shaped like the warehouse's own: the same SKU stocked at two
+# centers, so naming one without the other is a real narrowing.
+_WAREHOUSE_ROWS = [
+    {
+        "inventory_id": "INV-000001",
+        "sku": "SKU-A100",
+        "fulfillment_center_id": "FC-EAST",
+        # The rule path takes its change off the first context row.
+        "changes": {"quantity_on_hand": 450},
+    },
+    {"inventory_id": "INV-000002", "sku": "SKU-B200", "fulfillment_center_id": "FC-EAST"},
+    {"inventory_id": "INV-000003", "sku": "SKU-C300", "fulfillment_center_id": "FC-WEST"},
+    {"inventory_id": "INV-000004", "sku": "SKU-D400", "fulfillment_center_id": "FC-WEST"},
+    {"inventory_id": "INV-000005", "sku": "SKU-A100", "fulfillment_center_id": "FC-WEST"},
+]
+
+
+def _render(renderable) -> str:
+    """The text a console would actually show for a Rich renderable."""
+    console = Console(file=io.StringIO(), width=140)
+    console.print(renderable)
+    return console.file.getvalue()
 
 
 async def _stored(ops_client):
@@ -438,9 +468,52 @@ class TestTargeting:
             {"shipment_id": "SHP-20250301-00001", "status": "in_transit"},
         ]
 
-        proposal = await propose_action(None, ADJUST_QUERY, rows)
+        proposal = await propose_action(None, BROAD_ADJUST_QUERY, rows)
 
         assert proposal.target_ids == ["INV-000001", "INV-000002"]
+
+    async def test_the_sku_and_center_in_the_request_narrow_it(self):
+        # No surface ever shows an operator an INV id, so a stock count is
+        # named by the SKU and the center on the inventory table. Those have
+        # to narrow it, or every row the plan returned becomes a target.
+        proposal = await propose_action(None, "recount SKU-A100 at FC-WEST", _WAREHOUSE_ROWS)
+
+        assert proposal.target_ids == ["INV-000005"]
+
+    async def test_naming_only_a_sku_keeps_every_center_holding_it(self):
+        proposal = await propose_action(None, "recount SKU-A100", _WAREHOUSE_ROWS)
+
+        assert proposal.target_ids == ["INV-000001", "INV-000005"]
+
+    async def test_naming_only_a_center_keeps_everything_it_holds(self):
+        proposal = await propose_action(None, "recount everything at FC-WEST", _WAREHOUSE_ROWS)
+
+        assert proposal.target_ids == ["INV-000003", "INV-000004", "INV-000005"]
+
+    async def test_a_request_naming_neither_still_covers_the_context(self):
+        # Narrowing is an escape hatch, not a new requirement: a request that
+        # singles nothing out still means everything that was fetched.
+        proposal = await propose_action(None, BROAD_ADJUST_QUERY, _WAREHOUSE_ROWS)
+
+        assert proposal.target_ids == [row["inventory_id"] for row in _WAREHOUSE_ROWS]
+
+    async def test_a_named_sku_narrows_a_full_page_of_records_to_one(self):
+        # The shape of the reported failure: a plan that fetched a page of
+        # inventory must not turn a request naming one SKU into a 50-record
+        # mutation the operator cannot check.
+        rows = [
+            {
+                "inventory_id": f"INV-{i:06d}",
+                "sku": f"SKU-{i:04d}",
+                "fulfillment_center_id": "FC-WEST",
+            }
+            for i in range(1, 51)
+        ]
+        rows[0]["changes"] = {"quantity_on_hand": 450}
+
+        proposal = await propose_action(None, "recount SKU-0037 at FC-WEST", rows)
+
+        assert proposal.target_ids == ["INV-000037"]
 
 
 # ---------------------------------------------------------------------------
@@ -609,3 +682,26 @@ class TestConfirmationSummary:
 
         assert "Targets: 3 inventory records" in summary
         assert "entities" not in summary
+
+    async def test_the_panel_says_which_records_in_words_the_operator_knows(self):
+        # An INV id identifies nothing to the person approving the change --
+        # they have never seen one. The panel has to say which SKU at which
+        # center, or the gate is a wall of opaque ids nobody can check.
+        proposal = await propose_action(None, "recount everything at FC-WEST", _WAREHOUSE_ROWS)
+
+        panel = _render(display_action_proposal(proposal))
+
+        for row in _WAREHOUSE_ROWS:
+            if row["fulfillment_center_id"] != "FC-WEST":
+                continue
+            assert row["inventory_id"] in panel
+            assert row["sku"] in panel, f"{row['inventory_id']} is shown with no SKU: {panel}"
+        assert "FC-WEST" in panel
+
+    async def test_a_record_the_context_cannot_label_is_still_listed(self):
+        # A target with no row behind it must not vanish from the panel.
+        proposal = _proposal(_adjust_inventory(), [SEEDED_ID], {"quantity_on_hand": 450})
+
+        panel = _render(display_action_proposal(proposal))
+
+        assert SEEDED_ID in panel
