@@ -77,7 +77,12 @@ mutations and returns a JSON object matching the ActionProposal Pydantic model.
   assign_exception     – assign an exception to a team member
   escalate_order       – escalate an order for priority handling
   flag_shipments       – flag one or more shipments for review
-  adjust_inventory     – adjust an inventory record's on-hand count or reorder point
+  adjust_inventory     – restate an inventory record's on-hand count or move
+                         its reorder point. quantity_on_hand is absolute: it
+                         replaces the stored count, it is never added to it.
+                         "we received 50 more units of SKU-A100" means emit the
+                         resulting total on hand, not 50 — emitting the delta
+                         would write off the rest of the stock.
   bulk_update          – apply the same change to many entities at once
 
 # Risk

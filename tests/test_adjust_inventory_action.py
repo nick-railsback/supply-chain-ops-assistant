@@ -643,6 +643,22 @@ class TestModelFacingPrompt:
         missing = [t.value for t in ActionType if t.value not in prompt]
         assert not missing, f"action types the model is never shown: {missing}"
 
+    def test_the_model_is_told_an_on_hand_value_replaces_the_count(self):
+        # "adjust", "recount" and "adjust stock" all sound like a delta, and
+        # the service applies quantity_on_hand as an absolute set. A model that
+        # reads "add 50 units" and emits 50 turns a replenishment into a
+        # write-off the operator cannot distinguish from an intended count.
+        prompt = _collapse(PROPOSE_ACTION_SYSTEM_PROMPT)
+
+        assert "quantity_on_hand" in prompt, (
+            "the model is never told the name of the field it sets on an inventory record"
+        )
+        assert re.search(
+            r"quantity_on_hand\b[^.]*\b(absolute|replaces|resulting|new total|not a delta)\b",
+            prompt,
+            re.IGNORECASE,
+        ), f"the model is not told quantity_on_hand is absolute rather than a delta: {prompt}"
+
     def test_the_stated_floor_names_the_inventory_case(self):
         heading = re.search(r"#\s*Risk\b", PROPOSE_ACTION_SYSTEM_PROMPT)
         assert heading, "the proposal prompt no longer states a risk floor"
