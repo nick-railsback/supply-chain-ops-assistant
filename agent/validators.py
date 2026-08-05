@@ -11,6 +11,7 @@ from models.action import ActionProposal, ActionType
 from models.oms import ExceptionPatch, OrderPatch
 from models.query import QueryPlan
 from models.tms import ShipmentPatch
+from models.wms import InventoryPatch
 
 # ---------------------------------------------------------------------------
 # Field registry: (system, entity, field) -> field_type
@@ -114,7 +115,16 @@ _PATCHABLE_FIELDS: dict[str, frozenset[str]] = {
     "order": frozenset(OrderPatch.model_fields),
     "exception": frozenset(ExceptionPatch.model_fields),
     "shipment": frozenset(ShipmentPatch.model_fields),
+    "inventory": frozenset(InventoryPatch.model_fields),
 }
+
+# The only actions whose change the dispatcher supplies itself (escalation
+# sets priority, flagging sets flagged), so their proposals may legitimately
+# name none. Every other action takes its change from the caller: an empty
+# dict there PATCHes nothing and is still reported to the operator as applied.
+ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE: frozenset[ActionType] = frozenset(
+    {ActionType.ESCALATE_ORDER, ActionType.FLAG_SHIPMENTS}
+)
 
 _ACTION_ENTITY: dict[ActionType, str] = {
     ActionType.UPDATE_ORDER_STATUS: "order",
@@ -122,10 +132,28 @@ _ACTION_ENTITY: dict[ActionType, str] = {
     ActionType.UPDATE_EXCEPTION: "exception",
     ActionType.ASSIGN_EXCEPTION: "exception",
     ActionType.FLAG_SHIPMENTS: "shipment",
+    ActionType.ADJUST_INVENTORY: "inventory",
 }
 
-# BULK_UPDATE routes per target by id prefix (same map _dispatch_action uses).
-_ID_PREFIX_ENTITY: dict[str, str] = {"ORD": "order", "EXC": "exception", "SHP": "shipment"}
+# Where a target id goes, by prefix: the entity whose PATCH contract its
+# changes are checked against, and the OpsClient method that writes it.
+#
+# BULK_UPDATE routes per target by prefix, and both surfaces read this map --
+# the validator to pick a contract, action_handler._dispatch_action to pick a
+# call. Registering an entity in only one of them is the defect this closes:
+# the validator admits a target it has checked against nothing, the operator
+# approves it, and the dispatcher then refuses it with "unknown ID prefix"
+# after approval, landing the whole batch in ActionResult.failed.
+ID_PREFIX_ROUTING: dict[str, tuple[str, str]] = {
+    "ORD": ("order", "update_order"),
+    "EXC": ("exception", "update_exception"),
+    "SHP": ("shipment", "update_shipment"),
+    "INV": ("inventory", "update_inventory"),
+}
+
+_ID_PREFIX_ENTITY: dict[str, str] = {
+    prefix: entity for prefix, (entity, _method) in ID_PREFIX_ROUTING.items()
+}
 
 # ---------------------------------------------------------------------------
 # Order status transition map
@@ -145,6 +173,32 @@ ORDER_STATUS_TRANSITIONS: dict[str, list[str]] = {
 # ---------------------------------------------------------------------------
 # Validators
 # ---------------------------------------------------------------------------
+
+
+def mutated_entities(action_type: ActionType | None, target_ids: list[str]) -> set[str]:
+    """The entities a proposal's targets will actually be written to.
+
+    An action bound to one entity answers from ``_ACTION_ENTITY``; bulk_update
+    routes per target by id prefix, so its entities are read off the ids
+    themselves. The single answer to "what does this proposal touch?", so the
+    change validator and the risk floor cannot disagree about it.
+    """
+    entity = _ACTION_ENTITY.get(action_type) if action_type is not None else None
+    if entity is not None:
+        return {entity}
+    return {_ID_PREFIX_ENTITY[tid[:3]] for tid in target_ids if tid[:3] in _ID_PREFIX_ENTITY}
+
+
+def target_prefixes(action_type: ActionType) -> frozenset[str]:
+    """Id prefixes naming an entity *action_type* can actually write to.
+
+    bulk_update routes per target, so every known prefix is fair game for it;
+    every other action can only write to its own entity.
+    """
+    entity = _ACTION_ENTITY.get(action_type)
+    if entity is None:
+        return frozenset(_ID_PREFIX_ENTITY)
+    return frozenset(prefix for prefix, ent in _ID_PREFIX_ENTITY.items() if ent == entity)
 
 
 def _effective_entity(system: str, primary_entity: str) -> str:
@@ -276,20 +330,22 @@ async def validate_action_proposal(proposal: ActionProposal) -> list[str]:
             f"exceeding the cap of {settings.bulk_update_cap}."
         )
 
+    # An action naming no change would modify nothing and still be reported as
+    # applied, so it is refused while it is still a proposal.
+    supplies_own_change = proposal.action_type in ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE
+    if not proposal.changes and not supplies_own_change:
+        entity = _ACTION_ENTITY.get(proposal.action_type)
+        fields = sorted(_PATCHABLE_FIELDS[entity]) if entity else "the target's patchable fields"
+        errors.append(
+            f"Action '{proposal.action_type.value}' names no change; it would modify "
+            f"nothing and still be reported as applied. Name the fields to set: {fields}."
+        )
+
     # Changes must be expressible by the target entity's PATCH contract — the
     # services forbid unknown fields (422), so rejecting here keeps a doomed
     # proposal from passing human confirmation first.
     if proposal.changes:
-        entity = _ACTION_ENTITY.get(proposal.action_type)
-        entities = (
-            {entity}
-            if entity is not None
-            else {
-                _ID_PREFIX_ENTITY[tid[:3]]
-                for tid in proposal.target_ids
-                if tid[:3] in _ID_PREFIX_ENTITY
-            }
-        )
+        entities = mutated_entities(proposal.action_type, proposal.target_ids)
         for ent in sorted(entities):
             unknown = sorted(set(proposal.changes) - _PATCHABLE_FIELDS[ent])
             if unknown:

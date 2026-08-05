@@ -490,9 +490,15 @@ def display_action_proposal(proposal: ActionProposal) -> Panel:
         renderables.append(Text(""))
 
     # Target IDs
+    # An id an operator has never been shown identifies nothing to them, so
+    # each target is named alongside the words it appears in on screen (a SKU
+    # and a center for inventory). Targets whose entity they read by id, or
+    # that no context row describes, are listed plain.
+    labels = proposal.target_labels or {}
     renderables.append(Text(f"  Targets ({len(proposal.target_ids)}):", style="bold"))
     for tid in proposal.target_ids[:20]:
-        renderables.append(Text(f"    {tid}"))
+        label = labels.get(tid)
+        renderables.append(Text(f"    {tid}" + (f"   {label}" if label else "")))
     if len(proposal.target_ids) > 20:
         renderables.append(Text(f"    ... and {len(proposal.target_ids) - 20} more", style="dim"))
 

@@ -25,37 +25,37 @@ from models.shared import RiskLevel
 class TestAssessRisk:
     def test_assess_risk_low(self):
         """Single target, non-irreversible status -> LOW."""
-        result = _assess_risk(1, {"status": "processing"})
+        result = _assess_risk(["ORD-2025-0001"], {"status": "processing"})
         assert result == RiskLevel.LOW
 
     def test_assess_risk_medium(self):
         """5 targets -> MEDIUM."""
-        result = _assess_risk(5, {"status": "shipped"})
+        result = _assess_risk([f"ORD-2025-{n:04d}" for n in range(5)], {"status": "shipped"})
         assert result == RiskLevel.MEDIUM
 
     def test_assess_risk_high_count(self):
         """15 targets -> HIGH (count-based)."""
-        result = _assess_risk(15, {"status": "processing"})
+        result = _assess_risk([f"ORD-2025-{n:04d}" for n in range(15)], {"status": "processing"})
         assert result == RiskLevel.HIGH
 
     def test_assess_risk_high_cancelled(self):
         """Cancelled status overrides to HIGH regardless of count."""
-        result = _assess_risk(1, {"status": "cancelled"})
+        result = _assess_risk(["ORD-2025-0001"], {"status": "cancelled"})
         assert result == RiskLevel.HIGH
 
     def test_assess_risk_high_returned(self):
         """Returned status overrides to HIGH regardless of count."""
-        result = _assess_risk(1, {"status": "returned"})
+        result = _assess_risk(["SHP-20250301-00001"], {"status": "returned"})
         assert result == RiskLevel.HIGH
 
     def test_assess_risk_escalation_floor(self):
         """Single-target escalations are graded at least MEDIUM."""
-        result = _assess_risk(1, {}, ActionType.ESCALATE_ORDER)
+        result = _assess_risk(["ORD-2025-0001"], {}, ActionType.ESCALATE_ORDER)
         assert result == RiskLevel.MEDIUM
 
     def test_assess_risk_financial_field(self):
         """Any change touching a financial field forces HIGH regardless of count."""
-        result = _assess_risk(1, {"order_value": 99999})
+        result = _assess_risk(["ORD-2025-0001"], {"order_value": 99999})
         assert result == RiskLevel.HIGH
 
 
@@ -72,6 +72,14 @@ class TestDetectActionType:
     def test_detect_action_type_assign_exception(self):
         result = _detect_action_type("assign exception to Sarah Chen")
         assert result == ActionType.ASSIGN_EXCEPTION
+
+    def test_detect_action_type_urgency_alone_still_escalates(self):
+        """Urgency is a weak signal, but it is still the only one here."""
+        result = _detect_action_type("this order is urgent")
+        assert result == ActionType.ESCALATE_ORDER
+
+        result = _detect_action_type("make ORD-2025-0001 a priority")
+        assert result == ActionType.ESCALATE_ORDER
 
     def test_detect_action_type_escalate(self):
         result = _detect_action_type("escalate this order immediately")
@@ -225,7 +233,10 @@ class TestProposeActionLLM:
         call = AsyncMock(side_effect=RuntimeError("boom"))
         with patch("agent.action_handler.structured_call", call):
             proposal = await propose_action(
-                None, "assign exception EXC-001 to Sarah Chen", [{"exception_id": "EXC-001"}]
+                None,
+                "assign exception EXC-001 to Sarah Chen",
+                # The rule path takes its change off the first context row.
+                [{"exception_id": "EXC-001", "changes": {"assigned_to": "Sarah Chen"}}],
             )
 
         # Fell back to the rule path, which builds reasoning from the query.
@@ -581,11 +592,28 @@ class TestFallbackTargets:
         with pytest.raises(ValueError, match="at least one target_id"):
             await propose_action(None, "escalate order ORD-2025-9999", rows)
 
+    async def test_an_id_from_another_entity_is_not_an_explicit_target(self, monkeypatch):
+        """An id the action could never write to does not narrow anything.
+
+        Naming an inventory record as the *reason* for flagging shipments is
+        not naming a target: the query mentions no shipment, so the shipments
+        in context are still what gets flagged.
+        """
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        rows = [{"shipment_id": f"SHP-20250301-{i:05d}"} for i in range(3)]
+        proposal = await propose_action(
+            None, "flag shipments delayed by the stockout at INV-000001", rows
+        )
+
+        assert proposal.action_type == ActionType.FLAG_SHIPMENTS
+        assert proposal.target_ids == [r["shipment_id"] for r in rows]
+
     async def test_entity_mismatched_rows_excluded(self, monkeypatch):
         monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
 
         rows = [
-            {"exception_id": "EXC-0001"},
+            {"exception_id": "EXC-0001", "changes": {"status": "resolved"}},
             {"order_id": "ORD-2025-0001"},
             {"shipment_id": "SHP-20250301-00001"},
         ]

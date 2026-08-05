@@ -3,16 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator
-from datetime import datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
-from fastapi import Depends, Query
+from fastapi import Depends, HTTPException, Query
 from sqlalchemy import Boolean, Float, Integer, String, func, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from models.shared import PaginatedResponse
-from models.wms import FulfillmentCenter, InventoryItem, StockMovement
+from models.wms import FulfillmentCenter, InventoryItem, InventoryPatch, StockMovement
 from services.common import apply_filters, build_paginated_response, create_app
 
 # ---------------------------------------------------------------------------
@@ -53,6 +53,11 @@ class InventoryORM(Base):
     reorder_point: Mapped[int] = mapped_column(Integer)
     last_counted_at: Mapped[str] = mapped_column(String)
     category: Mapped[str] = mapped_column(String)
+    # When the row was last written to, whichever field moved. Null on a row
+    # that has never been patched, so a seeded value is distinguishable from a
+    # changed one -- last_counted_at cannot carry that, since it dates a
+    # physical count and a reorder-point change is not one.
+    updated_at: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class StockMovementORM(Base):
@@ -241,3 +246,69 @@ async def utilization_stats(
     result = await session.execute(select(FulfillmentCenterORM))
     rows = result.scalars().all()
     return [FulfillmentCenter.model_validate(r) for r in rows]
+
+
+@app.patch("/inventory/{inventory_id}", response_model=InventoryItem)
+async def update_inventory(
+    inventory_id: str,
+    body: InventoryPatch,
+    session: AsyncSession = Depends(get_session),
+) -> InventoryItem:
+    """Adjust on-hand count and reorder point, keeping availability derived."""
+    result = await session.execute(
+        select(InventoryORM).where(InventoryORM.inventory_id == inventory_id)
+    )
+    item = result.scalar_one_or_none()
+    if item is None:
+        raise HTTPException(status_code=404, detail=f"Inventory {inventory_id} not found")
+
+    # exclude_unset distinguishes "field absent" from "field sent as null", and
+    # absent is what decides whether this patch counts as a stock count below.
+    changes = body.model_dump(exclude_unset=True)
+
+    # A field named with no value is a caller error, not a request to leave it
+    # alone -- omitting it is how you do that. Dropping it here would answer
+    # 200 to a caller who sent a count, having stored nothing and stamped no
+    # count, and they would have no way to tell.
+    nulled = sorted(field for field, value in changes.items() if value is None)
+    if nulled:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Fields {nulled} were sent as null; omit a field to leave it "
+                f"unchanged, or give it a value"
+            ),
+        )
+
+    # Reject before writing anything: a refused patch must leave the row intact.
+    new_on_hand = changes.get("quantity_on_hand")
+    if new_on_hand is not None and new_on_hand < item.quantity_allocated:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"quantity_on_hand {new_on_hand} is below quantity_allocated "
+                f"{item.quantity_allocated}; availability cannot be negative"
+            ),
+        )
+
+    for field, value in changes.items():
+        setattr(item, field, value)
+
+    # A count is what moves this field; a reorder-point change is policy, not a count.
+    if "quantity_on_hand" in changes:
+        item.last_counted_at = datetime.now(UTC).isoformat()
+
+    # Every patch that writes something is dated, the way patch_order dates an
+    # order. A reorder-point change stamps no count, so without this it would
+    # leave the row indistinguishable from one seeded that way. A body naming
+    # no field asked for nothing and is not a mutation to record.
+    if changes:
+        item.updated_at = datetime.now(UTC).isoformat()
+
+    # Availability is derived, never patched -- recomputed on every accepted patch
+    # so GET /inventory/low-stock cannot drift out of sync with on-hand.
+    item.quantity_available = item.quantity_on_hand - item.quantity_allocated
+
+    await session.commit()
+    await session.refresh(item)
+    return InventoryItem.model_validate(item)

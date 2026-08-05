@@ -5,7 +5,7 @@ from enum import StrEnum
 
 from pydantic import Field
 
-from models.shared import ApiModel
+from models.shared import ApiModel, StrictPatch
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -52,6 +52,10 @@ class InventoryItem(ApiModel):
     reorder_point: int
     last_counted_at: datetime
     category: str
+    # When this row was last written to, whichever field moved; None on a row
+    # that has never been patched. last_counted_at dates a physical count, so
+    # it cannot serve as the record that a mutation happened.
+    updated_at: datetime | None = None
 
 
 class StockMovement(ApiModel):
@@ -75,3 +79,16 @@ class UtilizationStats(ApiModel):
     current_utilization: float
     units_used: int
     units_available: int
+
+
+# ---------------------------------------------------------------------------
+# Patch request models (the WMS PATCH contract)
+# ---------------------------------------------------------------------------
+
+
+class InventoryPatch(StrictPatch):
+    # quantity_allocated follows from orders and quantity_available is derived
+    # from the other two, so neither is the caller's to set: both are rejected
+    # by being absent here.
+    quantity_on_hand: int | None = Field(default=None, ge=0)
+    reorder_point: int | None = Field(default=None, ge=0)

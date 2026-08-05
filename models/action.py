@@ -16,6 +16,7 @@ class ActionType(StrEnum):
     ASSIGN_EXCEPTION = "assign_exception"
     ESCALATE_ORDER = "escalate_order"
     FLAG_SHIPMENTS = "flag_shipments"
+    ADJUST_INVENTORY = "adjust_inventory"
     BULK_UPDATE = "bulk_update"
 
 
@@ -33,6 +34,11 @@ class ActionProposal(BaseModel):
     # by target id, used to validate every transition individually. Never
     # dispatched (kept out of ``changes``).
     current_statuses: dict[str, str] | None = None
+    # Display-only metadata: each target id described in the words the operator
+    # reads it by, keyed by target id. An inventory id names nothing to the
+    # person approving the change — no surface ever shows them one. Never
+    # dispatched, and never supplied by the model.
+    target_labels: dict[str, str] | None = None
 
 
 class ActionResult(BaseModel):

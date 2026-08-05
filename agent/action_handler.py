@@ -14,7 +14,13 @@ import time
 from typing import Any
 
 from agent.llm import LLMUnavailable, structured_call
-from agent.validators import validate_action_proposal
+from agent.validators import (
+    ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE,
+    ID_PREFIX_ROUTING,
+    mutated_entities,
+    target_prefixes,
+    validate_action_proposal,
+)
 from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER
 from models.action import ActionProposal, ActionResult, ActionType
 from models.shared import RiskLevel
@@ -59,18 +65,33 @@ _ACTION_KEYWORDS: dict[ActionType, list[str]] = {
     ActionType.ESCALATE_ORDER: [
         "escalate order",
         "escalate",
-        "priority",
-        "urgent",
     ],
     ActionType.FLAG_SHIPMENTS: [
         "flag shipment",
         "flag delivery",
         "review shipment",
     ],
+    ActionType.ADJUST_INVENTORY: [
+        "adjust inventory",
+        "inventory count",
+        "adjust stock",
+        "recount",
+        "set on hand",
+    ],
     ActionType.BULK_UPDATE: [
         "bulk update",
         "update all",
         "batch update",
+    ],
+}
+
+# Words that say how urgently, not what to do. They turn up in requests about
+# every entity ("urgent: recount SKU-A100"), so they name an escalation only
+# when nothing in the query names an action of its own.
+_URGENCY_KEYWORDS: dict[ActionType, list[str]] = {
+    ActionType.ESCALATE_ORDER: [
+        "priority",
+        "urgent",
     ],
 }
 
@@ -81,6 +102,10 @@ _IRREVERSIBLE_STATUSES = frozenset({"cancelled", "returned"})
 
 # Changes touching money force HIGH risk regardless of target count.
 _FINANCIAL_FIELDS = frozenset({"order_value", "shipping_cost"})
+
+# Entities no single-target write to is routine, whatever action type carries
+# it. A count restated on the shelf is not reversible by re-running anything.
+_MEDIUM_FLOOR_ENTITIES = frozenset({"inventory"})
 
 _MEDIUM_TARGET_MAX = 10  # <= this -> MEDIUM; above -> HIGH
 _AUTO_CONFIRM_TARGET_MAX = 5  # LOW risk above this still requires confirmation
@@ -103,19 +128,25 @@ PROPOSE_ACTION_SYSTEM_PROMPT = PROPOSE_ACTION_SYSTEM.format(
 
 
 def _assess_risk(
-    target_count: int,
+    target_ids: list[str],
     changes: dict[str, Any],
     action_type: ActionType | None = None,
 ) -> RiskLevel:
-    """Determine risk level from target count and change characteristics.
+    """Determine risk level from the targets and the change characteristics.
 
     Rules:
       - 1 target → LOW
       - 2–10 targets → MEDIUM
       - >10 targets → HIGH
-      - Escalations → at least MEDIUM (priority changes deserve a human gate)
+      - Escalations, and anything writing to an inventory record → at least
+        MEDIUM
       - Irreversible status transitions → HIGH (override)
       - Financial-field changes → HIGH (override)
+
+    The inventory floor keys on the entity the write lands on, not on the
+    action's label: restating a physical count is never routine, so reaching
+    an inventory record through bulk_update cannot buy a lower gate than
+    adjust_inventory would have.
     """
     new_status = changes.get("status", "")
     if isinstance(new_status, str) and new_status in _IRREVERSIBLE_STATUSES:
@@ -123,9 +154,14 @@ def _assess_risk(
     if _FINANCIAL_FIELDS & changes.keys():
         return RiskLevel.HIGH
 
+    target_count = len(target_ids)
     if target_count > _MEDIUM_TARGET_MAX:
         return RiskLevel.HIGH
-    if target_count > 1 or action_type is ActionType.ESCALATE_ORDER:
+    if (
+        target_count > 1
+        or action_type == ActionType.ESCALATE_ORDER
+        or _MEDIUM_FLOOR_ENTITIES & mutated_entities(action_type, target_ids)
+    ):
         return RiskLevel.MEDIUM
     return RiskLevel.LOW
 
@@ -145,7 +181,7 @@ def _apply_risk_floor(
     cannot carry a lowered gate past the floor.
     """
     target_count = len(target_ids)
-    risk = _assess_risk(target_count, changes, action_type)
+    risk = _assess_risk(target_ids, changes, action_type)
     if isinstance(claimed_risk, str) and claimed_risk in {r.value for r in RiskLevel}:
         claimed_risk = RiskLevel(claimed_risk)
     if isinstance(claimed_risk, RiskLevel):
@@ -155,7 +191,7 @@ def _apply_risk_floor(
 
 
 # Explicit entity ids in a query (e.g. "escalate order ORD-2025-0001").
-_ENTITY_ID_PATTERN = re.compile(r"\b(?:ORD|EXC|SHP)-[A-Za-z0-9-]+\b")
+_ENTITY_ID_PATTERN = re.compile(r"\b(?:ORD|EXC|SHP|INV)-[A-Za-z0-9-]+\b")
 
 # The id field each action's entity carries in context rows.
 _ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
@@ -164,8 +200,90 @@ _ACTION_ID_FIELDS: dict[ActionType, tuple[str, ...]] = {
     ActionType.UPDATE_EXCEPTION: ("exception_id",),
     ActionType.ASSIGN_EXCEPTION: ("exception_id",),
     ActionType.FLAG_SHIPMENTS: ("shipment_id",),
-    ActionType.BULK_UPDATE: ("id", "order_id", "exception_id", "shipment_id"),
+    ActionType.ADJUST_INVENTORY: ("inventory_id",),
+    ActionType.BULK_UPDATE: ("id", "order_id", "exception_id", "shipment_id", "inventory_id"),
 }
+
+
+# What an operator can actually see for a row, keyed by the row's id field and
+# listed in reading order. cli.format_inventory_table shows SKU, product,
+# center, availability and on-hand — never the inventory_id — so an inventory
+# record is named in the query, and named back in the confirmation panel, by
+# its SKU and center. Rows whose id an operator does read (orders, exceptions,
+# shipments) need no entry.
+_OPERATOR_VISIBLE_FIELDS: dict[str, tuple[str, ...]] = {
+    "inventory_id": ("sku", "fulfillment_center_id"),
+}
+
+
+def _identify(row: dict[str, Any], id_fields: tuple[str, ...]) -> tuple[str, str] | None:
+    """The (id field, id) a row contributes for *id_fields*, or None."""
+    for id_field in id_fields:
+        if id_field in row:
+            return id_field, str(row[id_field])
+    return None
+
+
+def _rows_named_by_query(
+    user_query: str,
+    relevant_data: list[dict[str, Any]],
+    id_fields: tuple[str, ...],
+) -> list[dict[str, Any]] | None:
+    """Rows the query singles out by an identifier the operator can see.
+
+    A field constrains only when the query names one of its values, so
+    "recount SKU-A100" keeps that SKU at every center while "recount SKU-A100
+    at FC-WEST" keeps one row. Returns None when the query names none of them
+    and therefore narrows nothing.
+    """
+    query_lower = user_query.lower()
+    named: dict[str, set[str]] = {}
+    for row in relevant_data:
+        identified = _identify(row, id_fields)
+        if identified is None:
+            continue
+        for field in _OPERATOR_VISIBLE_FIELDS.get(identified[0], ()):
+            value = row.get(field)
+            if value is None:
+                continue
+            text = str(value).lower()
+            if re.search(rf"\b{re.escape(text)}\b", query_lower):
+                named.setdefault(field, set()).add(text)
+
+    if not named:
+        return None
+    return [
+        row
+        for row in relevant_data
+        if all(str(row.get(field, "")).lower() in values for field, values in named.items())
+    ]
+
+
+def _target_labels(
+    relevant_data: list[dict[str, Any]],
+    id_fields: tuple[str, ...],
+    target_ids: list[str],
+) -> dict[str, str] | None:
+    """Describe each target in the words the operator reads it by.
+
+    Display-only, and only for entities whose id names nothing to them. A
+    target with no row behind it is simply left unlabelled.
+    """
+    wanted = set(target_ids)
+    labels: dict[str, str] = {}
+    for row in relevant_data:
+        identified = _identify(row, id_fields)
+        if identified is None or identified[1] not in wanted:
+            continue
+        id_field, entity_id = identified
+        parts = [
+            str(row[field])
+            for field in _OPERATOR_VISIBLE_FIELDS.get(id_field, ())
+            if row.get(field) is not None
+        ]
+        if parts:
+            labels[entity_id] = " @ ".join(parts)
+    return labels or None
 
 
 def _fallback_target_ids(
@@ -176,19 +294,34 @@ def _fallback_target_ids(
     """Pick the rule path's targets without fanning out across the context.
 
     Ids named explicitly in the query win, intersected with the context so a
-    typo can't target an unfetched row. Otherwise only rows carrying the id
-    field of the action's entity become targets — a context of mixed entities
+    typo can't target an unfetched row. Failing that, an identifier the
+    operator can actually see (a SKU, a fulfillment center) narrows the rows.
+    Only then does the whole context become targets, and even then only rows
+    carrying the id field of the action's entity — a context of mixed entities
     never all becomes targets of a single action.
+
+    Only ids the action could actually write to count as explicit. An id from
+    another entity is background, not a target ("flag shipments delayed by the
+    stockout at INV-000001" names no shipment), and taking the explicit branch
+    on one would intersect it against rows that can never contain it and empty
+    the target list.
     """
     id_fields = _ACTION_ID_FIELDS[action_type]
-    context_ids: list[str] = []
-    for row in relevant_data:
-        for id_field in id_fields:
-            if id_field in row:
-                context_ids.append(str(row[id_field]))
-                break
+    writable = target_prefixes(action_type)
+    explicit = [eid for eid in _ENTITY_ID_PATTERN.findall(user_query) if eid[:3] in writable]
 
-    explicit = _ENTITY_ID_PATTERN.findall(user_query)
+    rows = relevant_data
+    if not explicit:
+        narrowed = _rows_named_by_query(user_query, rows, id_fields)
+        if narrowed:
+            rows = narrowed
+
+    context_ids: list[str] = []
+    for row in rows:
+        identified = _identify(row, id_fields)
+        if identified is not None:
+            context_ids.append(identified[1])
+
     if explicit:
         context_set = set(context_ids)
         return [eid for eid in explicit if eid in context_set]
@@ -221,13 +354,23 @@ def _status_by_target(relevant_data: list[dict[str, Any]]) -> dict[str, str]:
 def _detect_action_type(user_query: str) -> ActionType:
     """Match *user_query* against keyword lists to pick an ActionType.
 
+    The longest matching keyword wins, so a phrase naming an action beats a
+    shorter one contained in the same query; registration order only breaks
+    ties. Urgency words are consulted only when nothing else matched, so
+    "urgent: recount SKU-A100" is read as the recount it is.
+
     Falls back to ``BULK_UPDATE`` when no keywords match.
     """
     query_lower = user_query.lower()
-    for action_type, keywords in _ACTION_KEYWORDS.items():
-        for kw in keywords:
-            if kw in query_lower:
-                return action_type
+    for keywords in (_ACTION_KEYWORDS, _URGENCY_KEYWORDS):
+        matched: list[tuple[int, ActionType]] = [
+            (len(kw), action_type)
+            for action_type, kws in keywords.items()
+            for kw in kws
+            if kw in query_lower
+        ]
+        if matched:
+            return max(matched, key=lambda m: m[0])[1]
     return ActionType.BULK_UPDATE
 
 
@@ -262,8 +405,10 @@ async def propose_action(
         schema = ActionProposal.model_json_schema()
         # The model grades its own risk_level / requires_confirmation —
         # merged below with the server floor, raise-only. The validator-only
-        # current_statuses ground truth must never come from the model.
+        # current_statuses ground truth, and the target_labels the operator
+        # reads before approving, must never come from the model.
         schema.get("properties", {}).pop("current_statuses", None)
+        schema.get("properties", {}).pop("target_labels", None)
         # Only the call itself may degrade to the rule path: a proposal the
         # validator rejects must surface to the operator as an error, never
         # silently become a different proposal.
@@ -299,8 +444,15 @@ async def propose_action(
                 claimed_confirm,
             )
             # Mirror the rule path: the transition validator needs each target's
-            # current status, which the model must never supply itself.
+            # current status, and the operator needs each target described in
+            # words they recognise. Both are read off the queried context here;
+            # neither may be supplied by the model.
             data.pop("current_statuses", None)
+            data["target_labels"] = _target_labels(
+                relevant_data,
+                _ACTION_ID_FIELDS.get(proposed_type, ()) if proposed_type else (),
+                [str(tid) for tid in data.get("target_ids", [])],
+            )
             if data.get("action_type") == ActionType.UPDATE_ORDER_STATUS.value and data.get(
                 "changes", {}
             ).get("status"):
@@ -354,6 +506,7 @@ async def propose_action(
         risk_level=risk,
         requires_confirmation=requires_confirmation,
         current_statuses=current_statuses,
+        target_labels=_target_labels(relevant_data, _ACTION_ID_FIELDS[action_type], target_ids),
     )
 
     errors = await validate_action_proposal(proposal)
@@ -387,6 +540,8 @@ def format_proposal_summary(proposal: ActionProposal) -> str:
         entity_noun = "order" if len(proposal.target_ids) == 1 else "orders"
     elif "shipment" in action_name:
         entity_noun = "shipment" if len(proposal.target_ids) == 1 else "shipments"
+    elif "inventory" in action_name:
+        entity_noun = "inventory record" if len(proposal.target_ids) == 1 else "inventory records"
     else:
         entity_noun = "entity" if len(proposal.target_ids) == 1 else "entities"
 
@@ -497,6 +652,16 @@ async def _dispatch_action(
     changes: dict[str, Any],
 ) -> None:
     """Route a single target's action to the appropriate OpsClient method."""
+    # Last stop before the wire: a changeless PATCH is accepted by the services
+    # and would land in ActionResult.successful, telling the operator a mutation
+    # they approved took effect when nothing moved. Only the two actions the
+    # dispatcher supplies a change for below may arrive empty.
+    if not changes and action_type not in ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE:
+        raise ValueError(
+            f"Refusing to {action_type.value} '{target_id}': no change was named, so the "
+            f"request would modify nothing and still be reported as applied."
+        )
+
     if action_type == ActionType.UPDATE_ORDER_STATUS:
         await client.update_order(target_id, changes)
 
@@ -514,17 +679,19 @@ async def _dispatch_action(
         flag_changes = {**changes, "flagged": True}
         await client.update_shipment(target_id, flag_changes)
 
+    elif action_type == ActionType.ADJUST_INVENTORY:
+        await client.update_inventory(target_id, changes)
+
     elif action_type == ActionType.BULK_UPDATE:
-        # Bulk update: try to infer the entity type from the target ID prefix
-        if target_id.startswith("ORD"):
-            await client.update_order(target_id, changes)
-        elif target_id.startswith("EXC"):
-            await client.update_exception(target_id, changes)
-        elif target_id.startswith("SHP"):
-            await client.update_shipment(target_id, changes)
-        else:
+        # Routed by the same map the validator picks a PATCH contract with, so
+        # a target it admits is always one this can write. A hand-written
+        # branch here would have to be kept in step with that map by hand, and
+        # the failure of doing so lands after human approval.
+        routing = ID_PREFIX_ROUTING.get(target_id[:3])
+        if routing is None:
             raise ValueError(
                 f"Cannot route bulk update for target '{target_id}': unknown ID prefix."
             )
+        await getattr(client, routing[1])(target_id, changes)
     else:
         raise ValueError(f"Unsupported action type: {action_type}")
