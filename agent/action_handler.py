@@ -17,6 +17,7 @@ from agent.llm import LLMUnavailable, structured_call
 from agent.validators import (
     ACTIONS_WITH_A_DISPATCHER_SUPPLIED_CHANGE,
     mutated_entities,
+    target_prefixes,
     validate_action_proposal,
 )
 from config.prompts import PROPOSE_ACTION_SYSTEM, PROPOSE_ACTION_USER
@@ -214,6 +215,12 @@ def _fallback_target_ids(
     typo can't target an unfetched row. Otherwise only rows carrying the id
     field of the action's entity become targets — a context of mixed entities
     never all becomes targets of a single action.
+
+    Only ids the action could actually write to count as explicit. An id from
+    another entity is background, not a target ("flag shipments delayed by the
+    stockout at INV-000001" names no shipment), and taking the explicit branch
+    on one would intersect it against rows that can never contain it and empty
+    the target list.
     """
     id_fields = _ACTION_ID_FIELDS[action_type]
     context_ids: list[str] = []
@@ -223,7 +230,8 @@ def _fallback_target_ids(
                 context_ids.append(str(row[id_field]))
                 break
 
-    explicit = _ENTITY_ID_PATTERN.findall(user_query)
+    writable = target_prefixes(action_type)
+    explicit = [eid for eid in _ENTITY_ID_PATTERN.findall(user_query) if eid[:3] in writable]
     if explicit:
         context_set = set(context_ids)
         return [eid for eid in explicit if eid in context_set]

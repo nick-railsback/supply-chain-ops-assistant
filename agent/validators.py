@@ -177,6 +177,18 @@ def mutated_entities(action_type: ActionType | None, target_ids: list[str]) -> s
     return {_ID_PREFIX_ENTITY[tid[:3]] for tid in target_ids if tid[:3] in _ID_PREFIX_ENTITY}
 
 
+def target_prefixes(action_type: ActionType) -> frozenset[str]:
+    """Id prefixes naming an entity *action_type* can actually write to.
+
+    bulk_update routes per target, so every known prefix is fair game for it;
+    every other action can only write to its own entity.
+    """
+    entity = _ACTION_ENTITY.get(action_type)
+    if entity is None:
+        return frozenset(_ID_PREFIX_ENTITY)
+    return frozenset(prefix for prefix, ent in _ID_PREFIX_ENTITY.items() if ent == entity)
+
+
 def _effective_entity(system: str, primary_entity: str) -> str:
     """The entity the dispatcher will actually query for *system*.
 

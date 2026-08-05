@@ -592,6 +592,23 @@ class TestFallbackTargets:
         with pytest.raises(ValueError, match="at least one target_id"):
             await propose_action(None, "escalate order ORD-2025-9999", rows)
 
+    async def test_an_id_from_another_entity_is_not_an_explicit_target(self, monkeypatch):
+        """An id the action could never write to does not narrow anything.
+
+        Naming an inventory record as the *reason* for flagging shipments is
+        not naming a target: the query mentions no shipment, so the shipments
+        in context are still what gets flagged.
+        """
+        monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
+
+        rows = [{"shipment_id": f"SHP-20250301-{i:05d}"} for i in range(3)]
+        proposal = await propose_action(
+            None, "flag shipments delayed by the stockout at INV-000001", rows
+        )
+
+        assert proposal.action_type == ActionType.FLAG_SHIPMENTS
+        assert proposal.target_ids == [r["shipment_id"] for r in rows]
+
     async def test_entity_mismatched_rows_excluded(self, monkeypatch):
         monkeypatch.setattr(get_settings(), "llm_enabled", False)  # force rule path
 
