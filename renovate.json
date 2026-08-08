@@ -7,6 +7,15 @@
   "semanticCommits": "enabled",
   "labels": ["dependencies"],
   "osvVulnerabilityAlerts": true,
+  "description": [
+    "prConcurrentLimit is raised above config:recommended's default of 10.",
+    "osvVulnerabilityAlerts only covers *direct* dependencies, so a vulnerable",
+    "transitive package (e.g. starlette via fastapi) can only be fixed by the",
+    "lockFileMaintenance refresh below. At the default limit, a 10-PR backlog",
+    "saturates the quota and starves that refresh -- which is exactly how two",
+    "High-severity transitive CVEs sat unfixed while the queue stayed red."
+  ],
+  "prConcurrentLimit": 20,
   "vulnerabilityAlerts": {
     "labels": ["dependencies", "security"]
   },
@@ -21,8 +30,14 @@
       "groupName": "dev tooling"
     },
     {
-      "description": "Auto-merge lockfile-maintenance refreshes once CI is green",
+      "description": [
+        "Auto-merge lockfile-maintenance refreshes once CI is green.",
+        "prPriority puts this ahead of routine version bumps in the queue: it is",
+        "the only update type that can remediate a transitive dependency, so it",
+        "must never be the PR that gets rate-limited away."
+      ],
       "matchUpdateTypes": ["lockFileMaintenance"],
+      "prPriority": 10,
       "automerge": true
     }
   ]
