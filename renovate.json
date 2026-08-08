@@ -2,43 +2,87 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
     "config:recommended",
-    "helpers:pinGitHubActionDigests"
+    "helpers:pinGitHubActionDigests",
+    "security:minimumReleaseAgePypi"
   ],
   "semanticCommits": "enabled",
   "labels": ["dependencies"],
   "osvVulnerabilityAlerts": true,
   "description": [
-    "prConcurrentLimit is raised above config:recommended's default of 10.",
-    "osvVulnerabilityAlerts only covers *direct* dependencies, so a vulnerable",
-    "transitive package (e.g. starlette via fastapi) can only be fixed by the",
-    "lockFileMaintenance refresh below. At the default limit, a 10-PR backlog",
-    "saturates the quota and starves that refresh -- which is exactly how two",
-    "High-severity transitive CVEs sat unfixed while the queue stayed red."
+    "Dependency stability in this repo comes from uv.lock plus `uv sync --frozen`",
+    "in CI -- hash-verified, reproducible installs that fail the build if the lock",
+    "and pyproject.toml drift. Renovate does not provide that stability; it only",
+    "delivers candidate updates. CI decides whether they land.",
+    "",
+    "So updates are delivered silently. `automergeType: branch` means Renovate",
+    "pushes a branch, waits for the full CI suite (ruff, mypy, pytest, the",
+    "thresholded interpreter eval, and the OSV scan), and merges the commit to",
+    "main without opening a pull request. A PR is raised only when CI fails or",
+    "stays pending for 24h -- that is, only when a human is actually needed.",
+    "",
+    "`security:minimumReleaseAgePypi` holds new PyPI releases for three days",
+    "before proposing them. Silent automerge removes the human eyeball from the",
+    "happy path, so that delay is what buys scanners time to catch a compromised",
+    "release before it reaches main."
   ],
-  "prConcurrentLimit": 20,
+  "schedule": ["before 6am on the first day of the month"],
+  "automerge": true,
+  "automergeType": "branch",
   "vulnerabilityAlerts": {
-    "labels": ["dependencies", "security"]
+    "description": [
+      "Vulnerability alerts skip the schedule and every concurrency limit, so a",
+      "fix is proposed as soon as it exists. `minimumReleaseAge: null` opts them",
+      "out of the three-day PyPI hold -- waiting out a quarantine window on a",
+      "known-exploitable CVE is the wrong trade.",
+      "",
+      "This path reads GitHub's Dependabot alerts and requires the dependency",
+      "graph and Dependabot alerts to be enabled on the repo. `osvVulnerability-",
+      "Alerts` above is the independent channel: it queries OSV directly, needs",
+      "no GitHub setting, but covers *direct* dependencies only. A vulnerable",
+      "transitive package (e.g. starlette via fastapi) is reachable only through",
+      "the lockFileMaintenance refresh below."
+    ],
+    "labels": ["dependencies", "security"],
+    "minimumReleaseAge": null
   },
   "lockFileMaintenance": {
+    "description": [
+      "Re-resolves uv.lock against current upstream without changing any",
+      "constraint in pyproject.toml. This is the only update type that can",
+      "remediate a transitive dependency, so it runs on its own weekly cadence",
+      "rather than waiting for the monthly batch."
+    ],
     "enabled": true,
     "schedule": ["before 6am on monday"]
   },
   "packageRules": [
     {
-      "description": "Group dev-tooling (PEP 735 dev group) into one PR",
-      "matchDepTypes": ["dev"],
-      "groupName": "dev tooling"
+      "description": [
+        "One branch for every routine update, so the whole batch is gated by a",
+        "single CI run instead of one run per bump."
+      ],
+      "matchPackageNames": ["*"],
+      "groupName": "all dependencies"
     },
     {
       "description": [
-        "Auto-merge lockfile-maintenance refreshes once CI is green.",
-        "prPriority puts this ahead of routine version bumps in the queue: it is",
-        "the only update type that can remediate a transitive dependency, so it",
-        "must never be the PR that gets rate-limited away."
+        "Majors carry the real breaking-change risk, so keep them out of the",
+        "batch and on their own branch. They still automerge on green -- the",
+        "point is blast radius: a failing major fails alone instead of blocking",
+        "every other update behind it. Flip `automerge` to false here if these",
+        "should be eyeballed instead."
+      ],
+      "matchUpdateTypes": ["major"],
+      "groupName": null
+    },
+    {
+      "description": [
+        "Keep the lockfile refresh on its own branch too. Coupling the transitive-",
+        "CVE fix path to a routine version bump is how it ends up blocked behind",
+        "an unrelated failure."
       ],
       "matchUpdateTypes": ["lockFileMaintenance"],
-      "prPriority": 10,
-      "automerge": true
+      "groupName": null
     }
   ]
 }
