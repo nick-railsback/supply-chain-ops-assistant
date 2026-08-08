@@ -4,6 +4,13 @@ on:
   push:
     branches: [main]
   pull_request:
+  # A new advisory can land against an unchanged lockfile, so the push/PR
+  # triggers alone can leave main quietly vulnerable for as long as nobody
+  # commits. Re-scan weekly (Monday, after Renovate's lockfile refresh window)
+  # so the OSV job reports on its own.
+  schedule:
+    - cron: "17 7 * * 1"
+  workflow_dispatch:
 
 # Least-privilege by default; jobs only read repo contents.
 permissions:
