@@ -46,8 +46,10 @@ jobs:
       - name: Ruff format check
         run: uv run ruff format --check .
 
+      # Package list comes from [tool.mypy] files in pyproject.toml, so this
+      # step and `make typecheck` cannot drift apart.
       - name: Type-check
-        run: uv run mypy agent models services seed cli config
+        run: uv run mypy
 
       # Exclude live-LLM tests (they require an ANTHROPIC_API_KEY).
       - name: Tests

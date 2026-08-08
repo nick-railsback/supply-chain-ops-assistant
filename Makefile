@@ -7,7 +7,7 @@ format:
 	uv run ruff format .
 
 typecheck:
-	uv run mypy agent models services seed cli config
+	uv run mypy
 
 test:
 	uv run pytest
