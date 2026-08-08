@@ -39,7 +39,26 @@ uv.lock.bak
 _bmad/
 _bmad-output/
 
-.claude/
+# Local Claude Code config stays out of git — settings, and the repo's own
+# context pack, which is regenerated rather than edited. One exception below.
+.claude/*
+!.claude/skills/
+.claude/skills/*
+
+# The monō foundry context pack ships. It is a curated read of monō ai's
+# published documentation at commit c0e1c095, and it is the derivation source
+# for the triage wedge's MCP and skill artifacts. research/source-paths.json
+# records the pinned SHA, which is what makes "validated against the documented
+# contract at the pinned commit" a checkable claim rather than an assertion.
+!.claude/skills/mono-foundry-context/
+
+# ...but not the skill-engine plugin's own machinery. These are generated
+# tooling templates, not authored content, and they describe the harness rather
+# than the work.
+.claude/skills/mono-foundry-context/verify.sh
+.claude/skills/mono-foundry-context/evals/
+.claude/skills/mono-foundry-context/research/.discover-inventory.json
+.claude/skills/mono-foundry-context/research/.research-state.json
 
 # Local-only docs
 project-spec.md
