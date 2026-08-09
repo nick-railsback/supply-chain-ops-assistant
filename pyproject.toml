@@ -16,6 +16,7 @@ dependencies = [
     "structlog>=26.1,<27",
     "rich>=15,<16",
     "faker>=40.12,<41",
+    "mcp>=2.0.0",
 ]
 
 [dependency-groups]
@@ -51,7 +52,7 @@ strict = false
 # call sites, and two lists that must move together is how one silently stops
 # matching the other — a new top-level package is invisible to mypy by default
 # under this configuration, so it would ship untyped with the build still green.
-files = ["agent", "models", "services", "seed", "cli", "config", "triage"]
+files = ["agent", "models", "services", "seed", "cli", "config", "triage", "mcp_server"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
