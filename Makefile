@@ -1,4 +1,4 @@
-.PHONY: lint format typecheck test eval demo seed serve cli stop docker-up
+.PHONY: lint format typecheck test eval eval-triage demo seed serve cli stop docker-up
 
 lint:
 	uv run ruff check .
@@ -16,6 +16,12 @@ test:
 #   make eval EVAL_ARGS="--arm both"
 eval:
 	uv run python -m evals.run_eval $(EVAL_ARGS)
+
+# Triage reference eval — a live Claude pass over the stuck-order gold set.
+# Local only: not part of `make test`, not wired into CI (nondeterministic,
+# costs tokens). Gate it with EVAL_ARGS="--min-accuracy 0.6".
+eval-triage:
+	uv run python -m evals.run_triage_eval $(EVAL_ARGS)
 
 demo:
 	uv run python scripts/run_demo.py
