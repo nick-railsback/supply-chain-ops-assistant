@@ -321,6 +321,41 @@ The rule baseline is deliberately unflattering: it drops filters it has no patte
 
 ---
 
+## Foundry Triage Wedge
+
+Alongside the open-ended copilot above, this repo ships a second, narrower
+workflow built as **monō foundry**-native artifacts: diagnose why a specific
+order is stuck, propose the next action, and draft customer-facing comms —
+through a dedicated read-only MCP server rather than the general-purpose
+turn pipeline, with every proposal waiting on human approval before
+anything is sent or executed. It's additive: nothing above changed to
+support it, and it's scored the same way the interpreter above is —
+measured, not asserted.
+
+- **A closed root-cause taxonomy and a 22-case hand-labeled gold set**
+  (`inventory` / `carrier` / `address_exception`), independent by
+  construction of the detection logic and the diagnostic model being
+  scored against it.
+- **A read-only stdio MCP server** (`mcp_server/`) exposing three tools —
+  list stuck orders, pull full triage context for one order, pull
+  carrier-level SLA stats — with no write path anywhere in the surface.
+- **Foundry workspace artifacts** — `.mcp.json`, `MONOFOUNDRY.md`, and the
+  `triage` skill under `.monofoundry/skills/` — shaped against the
+  documented Foundry and Model Context Protocol contracts at their pinned
+  commits, not against a live Foundry session (that gap is stated
+  explicitly, not implied away).
+- **A reference triage-eval runner** (`make eval-triage`), validated
+  offline against a faked Claude client and run on demand — a live model
+  call is a cost and a sample, not something every build should assert.
+
+Full writeup: the [engagement memo](docs/foundry-engagement-memo.md) (the
+ask, the scope calls, what shipped, the measured result and its caveats)
+and the [Foundry field notes](docs/foundry-field-notes.md) (the contract
+quirks, the protocol-layer gotchas, and what the `mcp` SDK actually costs
+the lockfile).
+
+---
+
 ## Project Structure
 
 ```
@@ -367,6 +402,24 @@ supply-chain-ops-assistant/
 |   |-- constants.py             # Seed data constants (SKUs, carriers, centers, channels)
 |   +-- context.py               # Cross-system context for referential integrity
 |
+|-- triage/                       # Stuck-order root-cause taxonomy and detection (Foundry wedge)
+|   |-- taxonomy.py              # RootCause: inventory | carrier | address_exception
+|   |-- detection.py             # is_stuck: what makes an order a triage candidate
+|   +-- models.py                # TriageCase and the evidence payload shape
+|
+|-- mcp_server/                   # Read-only stdio MCP server (Foundry wedge)
+|   |-- server.py                # Tool registration, protocol layer
+|   |-- tools.py                 # Tool logic against the shared OpsClient
+|   |-- models.py                # TriageContext response shape
+|   +-- __main__.py              # `python -m mcp_server` stdio entrypoint
+|
+|-- .monofoundry/skills/triage/    # Foundry skill: diagnose -> propose -> draft comms -> approve
+|   +-- SKILL.md
+|
+|-- docs/                         # Tracked, non-process documentation
+|   |-- foundry-engagement-memo.md  # Delivery narrative for the Foundry wedge
+|   +-- foundry-field-notes.md      # Foundry/MCP contract and dependency notes
+|
 |-- tests/                        # Test suite
 |   |-- conftest.py              # Shared fixtures (mock clients, test data)
 |   |-- test_queries.py          # Scenario-driven query integration tests
@@ -379,8 +432,10 @@ supply-chain-ops-assistant/
 |
 |-- docker-compose.yml            # Multi-service Docker stack with health checks
 |-- Dockerfile                    # Multi-stage build (builder + runtime)
-|-- Makefile                      # Dev commands: lint, format, typecheck, test, seed, serve
+|-- Makefile                      # Dev commands: lint, format, typecheck, test, seed, serve, eval-triage
 |-- pyproject.toml                # Project metadata and tool config (ruff, mypy, pytest)
+|-- .mcp.json                     # Foundry MCP server registration (stdio, triage server)
+|-- MONOFOUNDRY.md                # Foundry workspace instructions
 +-- .env.example                  # Environment variable template
 ```
 
@@ -403,6 +458,7 @@ supply-chain-ops-assistant/
 | Test Data | Faker | Realistic names, dates, addresses for seed data generation |
 | Testing | pytest + pytest-asyncio | Async test support, fixture composition, scenario parameterization |
 | Integration testing | httpx `ASGITransport` | In-process integration: OpsClient and query execution run against the real FastAPI apps, no live server needed |
+| Agent Interop | `mcp` (Python SDK) | The Foundry triage wedge's read-only stdio MCP server — see [Foundry Triage Wedge](#foundry-triage-wedge). Pulls a real transitive footprint (a second `httpx` major, `cryptography`, `jsonschema`, `opentelemetry-api`); details in the [field notes](docs/foundry-field-notes.md) |
 | Linting | Ruff | Fast Python linter and formatter (replaces flake8 + isort + black) |
 | Type Checking | mypy | Static type verification across all modules |
 | Package Manager | uv | Fast dependency resolution and virtual environment management |
