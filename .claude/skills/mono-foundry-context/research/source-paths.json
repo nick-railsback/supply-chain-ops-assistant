@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "sources": [
+    {
+      "id": "monoai-labs-mono-foundry",
+      "kind": "git-managed",
+      "url": "https://github.com/monoai-labs/mono-foundry",
+      "status": "confirmed",
+      "archived": false,
+      "lifecycle": {
+        "state": "reachable",
+        "last_checked": "2026-08-05T18:12:00Z",
+        "last_checked_sha": "c0e1c095855ae1f796a84026321a259dd1695190",
+        "proposed_url": null
+      },
+      "discovered_via": null
+    },
+    {
+      "id": "monoai-labs-mono-foundry-lsp-plugin",
+      "kind": "git-managed",
+      "url": "https://github.com/monoai-labs/mono-foundry-lsp-plugin",
+      "status": "confirmed",
+      "archived": false,
+      "lifecycle": {
+        "state": "reachable",
+        "last_checked": "2026-08-05T18:12:00Z",
+        "last_checked_sha": "28c44b405d5ef8640eb7fdee98e65fcb3043f7f4",
+        "proposed_url": null
+      },
+      "discovered_via": "monoai-labs-mono-foundry:docs/plugins.md#L451 (First-Party Plugins) — user-accepted 2026-08-05"
+    },
+    {
+      "id": "monoai-labs-mono-foundry-theme-plugin",
+      "kind": "git-managed",
+      "url": "https://github.com/monoai-labs/mono-foundry-theme-plugin",
+      "status": "confirmed",
+      "archived": false,
+      "lifecycle": {
+        "state": "reachable",
+        "last_checked": "2026-08-05T18:12:00Z",
+        "last_checked_sha": "5a902d69b61458b91115b2db3584344004ed080d",
+        "proposed_url": null
+      },
+      "discovered_via": "monoai-labs-mono-foundry:docs/plugins.md#L523 (First-Party Plugins) — user-accepted 2026-08-05"
+    },
+    {
+      "id": "monoai-labs-mono-foundry-highlight-plugin",
+      "kind": "git-managed",
+      "url": "https://github.com/monoai-labs/mono-foundry-highlight-plugin",
+      "status": "confirmed",
+      "archived": false,
+      "lifecycle": {
+        "state": "reachable",
+        "last_checked": "2026-08-05T18:12:00Z",
+        "last_checked_sha": "c286da615f48fe31669243d35597cc4e5cfab7ff",
+        "proposed_url": null
+      },
+      "discovered_via": "monoai-labs-mono-foundry:docs/plugins.md#L537 (First-Party Plugins) — user-accepted 2026-08-05"
+    }
+  ]
+}

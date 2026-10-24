@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "entries": [
+    { "path": "references/mono-foundry-first-party-plugins.md", "status": "added", "sha_before": null, "sha_after": "bc7d860" },
+    { "path": "SKILL.md", "status": "modified", "sha_before": "9c68f6b", "sha_after": "0f68fb0" },
+    { "path": "references/mono-foundry-doc-drift.md", "status": "modified", "sha_before": "7085ccc", "sha_after": "dec14e3" },
+    { "path": "references/mono-foundry-plugins.md", "status": "modified", "sha_before": "7c91c82", "sha_after": "78952e4" },
+    { "path": "research/.discover-inventory.json", "status": "modified", "sha_before": "4851dbe", "sha_after": "c7e3f37" },
+    { "path": "research/source-paths.json", "status": "modified", "sha_before": "ed474da", "sha_after": "417618a" },
+    { "path": "evals/eval-viewer.html", "status": "unchanged", "sha_before": "39e8c9b", "sha_after": "39e8c9b" },
+    { "path": "evals/evals.json", "status": "unchanged", "sha_before": "9d841d0", "sha_after": "9d841d0" },
+    { "path": "evals/render-eval-results.sh", "status": "unchanged", "sha_before": "d2da178", "sha_after": "d2da178" },
+    { "path": "evals/run-eval.sh", "status": "unchanged", "sha_before": "30b17ce", "sha_after": "30b17ce" },
+    { "path": "references/mono-foundry-architecture.md", "status": "unchanged", "sha_before": "f64a2b9", "sha_after": "f64a2b9" },
+    { "path": "references/mono-foundry-choosing-an-extension-point.md", "status": "unchanged", "sha_before": "27872ee", "sha_after": "27872ee" },
+    { "path": "references/mono-foundry-cli-operations.md", "status": "unchanged", "sha_before": "80fc48e", "sha_after": "80fc48e" },
+    { "path": "references/mono-foundry-daemon-runtime.md", "status": "unchanged", "sha_before": "9d24f49", "sha_after": "9d24f49" },
+    { "path": "references/mono-foundry-mcp-servers.md", "status": "unchanged", "sha_before": "d5f1607", "sha_after": "d5f1607" },
+    { "path": "references/mono-foundry-release-trajectory.md", "status": "unchanged", "sha_before": "e7059d9", "sha_after": "e7059d9" },
+    { "path": "references/mono-foundry-security-model.md", "status": "unchanged", "sha_before": "f519ac5", "sha_after": "f519ac5" },
+    { "path": "references/mono-foundry-skills-and-instructions.md", "status": "unchanged", "sha_before": "8a3cf44", "sha_after": "8a3cf44" },
+    { "path": "references/mono-foundry-subagents.md", "status": "unchanged", "sha_before": "00937a9", "sha_after": "00937a9" },
+    { "path": "research/.research-state.json", "status": "unchanged", "sha_before": "48e4ce3", "sha_after": "48e4ce3" },
+    { "path": "verify.sh", "status": "unchanged", "sha_before": "a972ed6", "sha_after": "a972ed6" }
+  ]
+}
